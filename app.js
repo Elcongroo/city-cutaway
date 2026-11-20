@@ -1,196 +1,383 @@
 import * as THREE from './vendor/three.module.js';
 import { createCity } from './scene.js';
 import { createMotion } from './motion.js';
+import { createAtlas } from './atlas.js';
+import { createDistrict } from './districts.js';
+import { createBuilding } from './building.js';
+import { guide } from './guide.js';
 
-const viewport = document.querySelector('#viewport');
-const loading = document.querySelector('#loading');
-const depthInput = document.querySelector('#depth');
-const depthValue = document.querySelector('#depth-value');
-const layerName = document.querySelector('#layer-name');
-const layerDot = document.querySelector('#layer-status .rail-dot');
-const depthButtons = [...document.querySelectorAll('[data-depth]')];
-const followButton = document.querySelector('#follow');
-const followLabel = document.querySelector('#follow-label');
-const resetButton = document.querySelector('#reset-view');
-const rainButton = document.querySelector('#rain');
-const rainLabel = document.querySelector('#rain-label');
-const gardenButton = document.querySelector('#garden');
-const replayButton = document.querySelector('#replay');
-const rainProgress = document.querySelector('#rain-progress');
-const rainStatus = document.querySelector('#rain-status');
+const elements = Object.fromEntries([
+  'app', 'viewport', 'loading', 'places', 'pins', 'controls', 'depth', 'depth-label', 'depth-value', 'scale',
+  'scene-title', 'scene-intro', 'scene-state', 'follow', 'reset-view', 'rain-control', 'rain',
+  'garden', 'replay', 'rain-progress', 'rain-status', 'guide-heading', 'guide-label',
+  'guide-copy', 'features', 'story', 'reference', 'building-cta',
+].map(id => [id, document.getElementById(id)]));
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const { clamp, damp } = THREE.MathUtils;
 
-const layers = [
-  { minimum: 0, button: 0, name: '城市街面', color: 'road' },
-  { minimum: 1, button: 7, name: '浅层排水', color: 'drain' },
-  { minimum: 8, button: 14, name: '地铁隧道', color: 'metro' },
-  { minimum: 16, button: 24, name: '地下基岩', color: 'earth' },
-];
-
 function start() {
-  const renderer = new THREE.WebGLRenderer({
-    alpha: true,
-    antialias: true,
-    powerPreference: 'high-performance',
-  });
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
   renderer.setClearColor(0, 0);
   renderer.localClippingEnabled = true;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.25;
-  viewport.append(renderer.domElement);
+  renderer.toneMappingExposure = 1.24;
+  const canvas = renderer.domElement;
+  elements.viewport.append(canvas);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, 160);
-  scene.add(new THREE.HemisphereLight(0xd5e9ff, 0xa37d68, 2.1));
-  const light = new THREE.DirectionalLight(0xffdeba, 2.4);
-  light.position.set(-12, 28, 18);
+  const camera = new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, 245);
+  scene.add(new THREE.HemisphereLight(0xdbedff, 0xa27e66, 2.05));
+  const light = new THREE.DirectionalLight(0xffe1bd, 2.55);
+  light.position.set(-20, 38, 28);
   scene.add(light);
-  const rim = new THREE.DirectionalLight(0x94bcff, 1.45);
-  rim.position.set(16, 12, -18);
+  const rim = new THREE.DirectionalLight(0x99c5ff, 1.48);
+  rim.position.set(23, 18, -29);
   scene.add(rim);
 
-  const city = createCity(scene);
-  const motion = createMotion(scene);
-  const look = new THREE.Vector3(0, 1.35, 0);
+  const worlds = new Map();
+  const states = new Map(Object.entries(guide).map(([id, profile]) => [
+    id,
+    {
+      value: id === 'building' ? 0 : 14,
+      visibleValue: id === 'building' ? 0 : 14,
+      selected: Object.keys(profile.features || {})[0],
+      story: false,
+    },
+  ]));
+  const routeButtons = [...elements.places.querySelectorAll('[data-route]')];
+  const look = new THREE.Vector3();
   const nextLook = new THREE.Vector3();
+  const cameraOffset = new THREE.Vector3();
   const train = new THREE.Vector3();
-  const view = {
-    yaw: 0.53,
-    pitch: 0.295,
-    zoom: 1,
-    actualYaw: 0.53,
-    actualPitch: 0.295,
-    actualZoom: 1,
-  };
-
+  const projected = new THREE.Vector3();
+  const view = { yaw: 0.37, pitch: 0.60, zoom: 1, actualYaw: 0.37, actualPitch: 0.60, actualZoom: 1 };
+  let mode = 'atlas';
+  let activeWorld;
+  let activePins = [];
+  let featureButtons = new Map();
+  let focusedFeature;
   let width = 1;
   let height = 1;
   let aspect = 1;
-  let depth = Number(depthInput.value);
-  let visibleDepth = reducedMotion.matches ? depth : 0;
-  let appliedDepth = NaN;
   let following = false;
   let raining = false;
   let garden = false;
   let elapsed = 0;
   let last = 0;
-  let activeLayer;
-  let activeRainStatus;
-  let showing = true;
   let renderFrame = 0;
+  let showing = true;
+  let rendered = false;
 
-  function setDepth(nextDepth) {
-    depth = clamp(Math.round(nextDepth), 0, 24);
-    depthInput.value = depth;
-    depthValue.firstChild.data = depth + ' ';
-    depthInput.style.setProperty('--fill', (depth / 24) * 100 + '%');
-    depthInput.setAttribute('aria-valuetext', depth === 0 ? '地表' : `地下 ${depth} 米`);
-    if (depth < 12 && following) setFollowing(false);
-    const layer = layers.findLast(item => depth >= item.minimum);
-    if (activeLayer === layer) return;
-    activeLayer = layer;
-    layerName.textContent = layer.name;
-    layerDot.className = 'rail-dot ' + layer.color;
-    for (const button of depthButtons) {
-      if (Number(button.dataset.depth) === layer.button) button.setAttribute('aria-current', 'true');
+  function ensureWorld(id) {
+    if (worlds.has(id)) return worlds.get(id);
+    const layer = new THREE.Group();
+    layer.visible = false;
+    let model;
+    let motion;
+    if (id === 'atlas') {
+      model = createAtlas(layer);
+    } else if (id === 'plain') {
+      const city = createCity(layer);
+      motion = createMotion(layer);
+      model = {
+        setDepth: city.setDepth,
+        hotspots: [
+          { id: 'street', position: new THREE.Vector3(-7.1, 0.85, 3.5) },
+          { id: 'pipes', position: new THREE.Vector3(7.5, -1.18, 8.3), minimumDepth: 6 },
+          { id: 'metro', position: new THREE.Vector3(-7.7, -4.5, 8.5), minimumDepth: 12 },
+          { id: 'building', position: new THREE.Vector3(0.8, 6.2, -0.3) },
+        ],
+      };
+    } else if (id === 'building') {
+      model = createBuilding(layer);
+    } else {
+      model = createDistrict(layer, id);
+    }
+    const result = { layer, model, motion };
+    worlds.set(id, result);
+    scene.add(layer);
+    return result;
+  }
+
+  function placeButton(label, action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  function updateGuide() {
+    const profile = guide[mode];
+    const state = states.get(mode);
+    if (mode === 'atlas') {
+      elements['guide-label'].textContent = '看懂一座城';
+      elements['guide-heading'].textContent = '出门以后，路是怎么接起来的？';
+      elements['guide-copy'].textContent = '从山坡出发，沿着河流经过桥梁、街区和村道，看看同一片区域里，地形如何改变人走的路、水流的方向和房子的位置。';
+    } else {
+      const feature = profile.features[state.selected];
+      elements['guide-label'].textContent = feature.name;
+      elements['guide-heading'].textContent = feature.question;
+      elements['guide-copy'].textContent = feature.answer;
+    }
+    for (const [id, button] of featureButtons) button.setAttribute('aria-pressed', id === state.selected);
+    for (const { hotspot, button } of activePins) {
+      if (profile.features?.[hotspot.id]) button.setAttribute('aria-pressed', hotspot.id === state.selected);
+    }
+    elements.story.hidden = !profile.story;
+    if (profile.story) {
+      elements.story.textContent = state.story ? profile.story.off : profile.story.on;
+      elements.story.setAttribute('aria-pressed', state.story);
+    }
+    const reference = elements.reference;
+    reference.hidden = !profile.source;
+    if (profile.source) {
+      [reference.textContent, reference.href] = profile.source;
+    }
+  }
+
+  function updateRange(value) {
+    const state = states.get(mode);
+    const isBuilding = mode === 'building';
+    const cap = isBuilding ? 100 : 24;
+    state.value = clamp(Math.round(value), 0, cap);
+    elements.depth.value = state.value;
+    elements.depth.style.setProperty('--fill', (state.value / cap) * 100 + '%');
+    elements['depth-value'].value = state.value + (isBuilding ? '%' : ' m');
+    const label = isBuilding ? '拆解 ' + state.value + '%' : state.value ? '地下 ' + state.value + ' 米' : '地表';
+    elements.depth.setAttribute('aria-valuetext', label);
+    if (mode === 'plain' && state.value < 12 && following) setFollowing(false);
+    updateStateBadge();
+  }
+
+  function updateStateBadge() {
+    const state = states.get(mode);
+    const badge = elements['scene-state'];
+    const profile = guide[mode];
+    let text = '';
+    if (profile.story && state.story) text = profile.story.status;
+    else if (mode === 'building') text = state.value === 0 ? '建筑外观' : state.value < 60 ? '楼层正在展开' : '建筑剖面';
+    else if (mode !== 'atlas') text = state.value ? '地下 ' + state.value + ' m' : '地表';
+    badge.hidden = !text;
+    if (badge.textContent !== text) badge.textContent = text;
+  }
+
+  function selectFeature(id, focus = true) {
+    const profile = guide[mode];
+    const state = states.get(mode);
+    if (!profile.features?.[id]) return;
+    state.selected = id;
+    if (focus) {
+      setFollowing(false);
+      focusedFeature = id;
+      view.zoom = mode === 'building' ? 1.16 : 1.27;
+      if (mode === 'building' && state.value < 66) updateRange(76);
+      if (profile.features[id].depth > state.value) updateRange(profile.features[id].depth);
+    }
+    updateGuide();
+  }
+
+  function renderFeatureControls() {
+    const profile = guide[mode];
+    featureButtons = new Map(Object.entries(profile.features || {}).map(([id, detail]) => [
+      id, placeButton(detail.name, () => selectFeature(id)),
+    ]));
+    elements.features.replaceChildren(...featureButtons.values());
+    activePins = activeWorld.model.hotspots.map(hotspot => {
+      const jumpsToScene = mode === 'atlas' || hotspot.id === 'building';
+      const label = jumpsToScene ? guide[hotspot.id].name : profile.features[hotspot.id].name;
+      const button = placeButton(label, () => {
+        if (jumpsToScene) navigate(hotspot.id);
+        else selectFeature(hotspot.id);
+      });
+      button.className = 'pin';
+      button.hidden = true;
+      if (jumpsToScene) button.style.setProperty('--accent', guide[hotspot.id].accent);
+      return { hotspot, button };
+    });
+    elements.pins.replaceChildren(...activePins.map(({ button }) => button));
+  }
+
+  function navigate(id) {
+    if (mode === id && activeWorld) return;
+    window.location.hash = id;
+  }
+
+  function readRoute() {
+    const requested = window.location.hash.slice(1);
+    return Object.hasOwn(guide, requested) ? requested : 'atlas';
+  }
+
+  function setMode(id) {
+    if (activeWorld && id === mode) return;
+    const world = ensureWorld(id);
+    if (activeWorld) activeWorld.layer.visible = false;
+    activeWorld = world;
+    world.layer.visible = true;
+    mode = id;
+    elements.app.dataset.mode = id;
+    const profile = guide[id];
+    const state = states.get(id);
+    elements.app.style.setProperty('--accent', profile.accent);
+    elements['scene-title'].textContent = profile.title;
+    elements['scene-intro'].textContent = profile.intro;
+    elements.follow.hidden = id !== 'plain';
+    elements.controls.hidden = id === 'atlas';
+    elements['rain-control'].hidden = id !== 'plain';
+    elements['building-cta'].hidden = id !== 'atlas' && id !== 'plain';
+    elements['depth-label'].textContent = id === 'building' ? '建筑展开度' : '剖面深度';
+    elements.depth.max = id === 'building' ? 100 : 24;
+    const scale = id === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['地表', '6 m', '12 m', '18 m', '24 m'];
+    elements.scale.replaceChildren(...scale.map(label => {
+      const mark = document.createElement('span');
+      mark.textContent = label;
+      return mark;
+    }));
+    for (const button of routeButtons) {
+      if (id === button.dataset.route) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
+    }
+    updateRange(state.value);
+    resetView();
+    renderFeatureControls();
+    updateGuide();
+    if (profile.story) activeWorld.model.setStory(state.story);
+    if (rendered && !reducedMotion.matches) {
+      elements.viewport.getAnimations().forEach(animation => animation.cancel());
+      elements.viewport.animate([{ opacity: 0.28 }, { opacity: 1 }], { duration: 420, easing: 'ease-out' });
     }
   }
 
   function setFollowing(active) {
     following = active;
-    followButton.setAttribute('aria-pressed', active);
-    followLabel.textContent = active ? '退出跟拍' : '跟拍地铁';
-    if (active && depth < 14) setDepth(14);
+    elements.follow.setAttribute('aria-pressed', active);
+    elements.follow.textContent = active ? '退出跟拍' : '跟拍地铁';
+    if (active && mode === 'plain') {
+      if (states.get('plain').value < 14) updateRange(14);
+      focusedFeature = undefined;
+      selectFeature('metro', false);
+    }
   }
 
   function resetView() {
     setFollowing(false);
-    view.yaw = 0.53;
-    view.pitch = 0.295;
-    view.zoom = 1;
+    focusedFeature = undefined;
+    const { yaw, pitch } = guide[mode];
+    view.yaw = view.actualYaw = yaw;
+    view.pitch = view.actualPitch = pitch;
+    view.zoom = view.actualZoom = 1;
+    look.set(0, guide[mode].y, 0);
   }
 
   function setRain(active) {
     raining = active;
-    motion.setRain(active);
-    rainButton.setAttribute('aria-pressed', active);
-    rainLabel.textContent = active ? '停止下雨' : '开始下雨';
-    replayButton.disabled = !active;
-    if (active && depth < 8) setDepth(8);
+    activeWorld.motion.setRain(active);
+    elements.rain.setAttribute('aria-pressed', active);
+    elements.rain.textContent = active ? '停止下雨' : '开始下雨';
+    elements.replay.disabled = !active;
+    if (active && states.get('plain').value < 8) updateRange(8);
   }
 
   function updateRainFeedback() {
-    const progress = raining ? motion.getPhase() : 0;
-    rainProgress.value = progress;
+    const progress = raining ? activeWorld.motion.getPhase() : 0;
+    elements['rain-progress'].value = progress;
     let status = '观察雨水如何进入排水管';
-    if (raining && progress >= 0.8) status = garden ? '雨水花园吸收部分径流' : '径流汇入地下排水管';
-    else if (raining && progress >= 0.4) status = garden ? '雨水流向花园' : '雨水流向路边的排水口';
+    if (raining && progress >= 0.8) status = garden ? '花园截留部分径流' : '径流汇入排水管';
+    else if (raining && progress >= 0.4) status = garden ? '雨水流向花园' : '雨水流向雨水口';
     else if (raining) status = '雨水沿屋顶和路面流动';
     else if (garden) status = '雨水花园已启用';
-    if (status !== activeRainStatus) {
-      rainStatus.textContent = status;
-      activeRainStatus = status;
-    }
+    if (status !== elements['rain-status'].textContent) elements['rain-status'].textContent = status;
   }
 
   function resize() {
-    width = Math.max(1, viewport.clientWidth);
-    height = Math.max(1, viewport.clientHeight);
+    width = Math.max(1, elements.viewport.clientWidth);
+    height = Math.max(1, elements.viewport.clientHeight);
     aspect = width / height;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, width < 650 ? 1.4 : 1.7));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, width < 650 ? 1.4 : 1.65));
     renderer.setSize(width, height, false);
   }
-  resize();
-  new ResizeObserver(resize).observe(viewport);
 
   function updateCamera(dt) {
-    const easing = reducedMotion.matches ? 1 : 1 - Math.exp(-dt * 5);
-    let yaw = view.yaw;
-    let pitch = view.pitch;
-    let zoom = view.zoom;
-    nextLook.set(0, 2.2 - visibleDepth * 0.045, 0);
-    if (following) {
-      motion.getTrainPosition(train);
-      nextLook.set(train.x * 0.7, train.y + 1.4, 2);
+    const profile = guide[mode];
+    const state = states.get(mode);
+    const easing = reducedMotion.matches ? 1 : 1 - Math.exp(-dt * 6);
+    let { yaw, pitch, zoom } = view;
+    const mobile = width < 650;
+    let baseY = profile.y;
+    if (mode === 'building') baseY = (activeWorld.model.focus?.y ?? baseY) + state.visibleValue * 0.016;
+    if (mode === 'atlas') baseY += mobile ? 4.2 : 2.5;
+    if (mobile && mode !== 'atlas') baseY += 2.25;
+    nextLook.set(0, baseY, 0);
+    if (focusedFeature) {
+      const spot = activeWorld.model.hotspots.find(hotspot => hotspot.id === focusedFeature);
+      if (spot) {
+        nextLook.x = spot.position.x * 0.60;
+        nextLook.y = THREE.MathUtils.lerp(baseY, spot.position.y, 0.42);
+        nextLook.z = spot.position.z * 0.36;
+      }
+    }
+    if (following && mode === 'plain') {
+      activeWorld.motion.getTrainPosition(train);
+      nextLook.set(train.x * 0.70, train.y + 1.35, 2);
       yaw = 0.38;
       pitch = 0.17;
-      zoom = 1.85;
+      zoom = 1.70;
     }
     look.lerp(nextLook, easing);
     view.actualYaw = THREE.MathUtils.lerp(view.actualYaw, yaw, easing);
     view.actualPitch = THREE.MathUtils.lerp(view.actualPitch, pitch, easing);
     view.actualZoom = THREE.MathUtils.lerp(view.actualZoom, zoom, easing);
-    const horizontal = Math.cos(view.actualPitch) * 58;
-    camera.position.copy(look).add(new THREE.Vector3(
-      Math.sin(view.actualYaw) * horizontal,
-      Math.sin(view.actualPitch) * 58,
-      Math.cos(view.actualYaw) * horizontal,
-    ));
-    const halfHeight = Math.max(28.5, 41 / aspect) / (view.actualZoom * 2);
+    const radius = 92;
+    const horizontal = Math.cos(view.actualPitch) * radius;
+    cameraOffset.set(Math.sin(view.actualYaw) * horizontal, Math.sin(view.actualPitch) * radius, Math.cos(view.actualYaw) * horizontal);
+    camera.position.copy(look).add(cameraOffset);
+    const halfHeight = Math.max(profile.height, profile.width / aspect) / (view.actualZoom * 2);
     const halfWidth = halfHeight * aspect;
-    const shift = width > 940 ? halfWidth * 0.095 : 0;
+    const shift = !mobile && mode !== 'building' ? halfWidth * 0.055 : 0;
     camera.left = -halfWidth - shift;
     camera.right = halfWidth - shift;
     camera.top = halfHeight;
     camera.bottom = -halfHeight;
     camera.lookAt(look);
     camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
   }
 
-  const canvas = renderer.domElement;
+  function updatePins() {
+    const { visibleValue } = states.get(mode);
+    const occupied = [];
+    for (const { hotspot, button } of activePins) {
+      if (following || (hotspot.minimumDepth ?? 0) > visibleValue) {
+        button.hidden = true;
+        continue;
+      }
+      projected.copy(hotspot.position).project(camera);
+      const offscreen = Math.abs(projected.x) > 0.94 || Math.abs(projected.y) > 0.94 || Math.abs(projected.z) > 1;
+      button.hidden = offscreen;
+      if (offscreen) continue;
+      const x = (projected.x + 1) * width / 2;
+      let y = (1 - projected.y) * height / 2;
+      const labelWidth = button.offsetWidth;
+      const left = clamp(x, labelWidth / 2 + 5, width - labelWidth / 2 - 5);
+      for (const pin of occupied) {
+        if (Math.abs(pin.x - left) < (pin.width + labelWidth) / 2 + 5 && Math.abs(pin.y - y) < 33) y = pin.y - 33;
+      }
+      occupied.push({ x: left, y, width: labelWidth });
+      button.style.transform = 'translate3d(' + left + 'px,' + Math.max(41, y) + 'px,0) translate(-50%, calc(-100% - 6px))';
+    }
+  }
+
   const pointers = new Map();
-  const orbit = (dx, dy) => {
+  function orbit(dx, dy) {
     if (following) setFollowing(false);
-    view.yaw = clamp(view.yaw - dx * 0.009, -0.66, 1.04);
-    view.pitch = clamp(view.pitch + dy * 0.006, 0.09, 0.78);
-  };
-  const zoomBy = multiplier => {
+    view.yaw = clamp(view.yaw - dx * 0.009, -1.04, 1.20);
+    view.pitch = clamp(view.pitch + dy * 0.006, 0.10, 0.88);
+  }
+  function zoomBy(multiplier) {
     if (following) setFollowing(false);
-    view.zoom = clamp(view.zoom * multiplier, 0.73, 2.3);
-  };
+    view.zoom = clamp(view.zoom * multiplier, 0.68, 2.5);
+  }
   canvas.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
     canvas.setPointerCapture(event.pointerId);
@@ -215,70 +402,91 @@ function start() {
   }
   canvas.addEventListener('wheel', event => {
     event.preventDefault();
-    zoomBy(Math.exp(-clamp(event.deltaY, -180, 180) * 0.0016));
+    zoomBy(Math.exp(-clamp(event.deltaY, -160, 160) * 0.0017));
   }, { passive: false });
-
   canvas.tabIndex = 0;
-  canvas.setAttribute('aria-label', '城市模型。用方向键旋转，用加减键缩放。');
+  canvas.setAttribute('aria-label', '三维模型。方向键旋转，加减键缩放，Home 键重置。');
   canvas.addEventListener('keydown', event => {
     const actions = {
-      ArrowLeft: () => orbit(-11, 0),
-      ArrowRight: () => orbit(11, 0),
-      ArrowUp: () => orbit(0, 11),
-      ArrowDown: () => orbit(0, -11),
-      '+': () => zoomBy(1.16),
-      '=': () => zoomBy(1.16),
-      '-': () => zoomBy(0.86),
-      Home: resetView,
+      ArrowLeft: () => orbit(-11, 0), ArrowRight: () => orbit(11, 0),
+      ArrowUp: () => orbit(0, 11), ArrowDown: () => orbit(0, -11),
+      '+': () => zoomBy(1.16), '=': () => zoomBy(1.16), '-': () => zoomBy(0.86), Home: resetView,
     };
-    const action = actions[event.key];
-    if (typeof action !== 'function') return;
+    if (!Object.hasOwn(actions, event.key)) return;
     event.preventDefault();
-    action();
+    actions[event.key]();
   });
 
-  depthInput.addEventListener('input', () => setDepth(Number(depthInput.value)));
-  for (const button of depthButtons) {
-    button.addEventListener('click', () => setDepth(Number(button.dataset.depth)));
-  }
-  followButton.addEventListener('click', () => setFollowing(!following));
-  resetButton.addEventListener('click', resetView);
-  rainButton.addEventListener('click', () => setRain(!raining));
-  gardenButton.addEventListener('click', () => {
+  for (const button of routeButtons) button.addEventListener('click', () => navigate(button.dataset.route));
+  window.addEventListener('hashchange', () => setMode(readRoute()));
+  elements['building-cta'].addEventListener('click', () => navigate('building'));
+  elements.depth.addEventListener('input', () => updateRange(Number(elements.depth.value)));
+  elements.follow.addEventListener('click', () => setFollowing(!following));
+  elements['reset-view'].addEventListener('click', resetView);
+  elements.rain.addEventListener('click', () => setRain(!raining));
+  elements.garden.addEventListener('click', () => {
     garden = !garden;
-    motion.setGarden(garden);
-    gardenButton.setAttribute('aria-pressed', garden);
+    activeWorld.motion.setGarden(garden);
+    elements.garden.setAttribute('aria-pressed', garden);
   });
-  replayButton.addEventListener('click', motion.replay);
+  elements.replay.addEventListener('click', () => activeWorld.motion.replay());
+  elements.story.addEventListener('click', () => {
+    const state = states.get(mode);
+    state.story = !state.story;
+    activeWorld.model.setStory(state.story);
+    if (state.story) {
+      resetView();
+      const storySpot = { river: 'bank', hill: 'steps', rural: 'canal' }[mode];
+      selectFeature(storySpot, false);
+    } else {
+      updateGuide();
+    }
+    updateStateBadge();
+  });
 
   function frame(now) {
     renderFrame = requestAnimationFrame(frame);
-    const dt = last ? Math.min(0.06, (now - last) / 1000) : 1 / 60;
+    const dt = last ? Math.min(0.067, (now - last) / 1000) : 1 / 60;
     last = now;
     if (!showing) return;
-    if (!reducedMotion.matches || following) elapsed += dt;
-    const easedDepth = damp(visibleDepth, depth, 5.8, dt);
-    visibleDepth = reducedMotion.matches || Math.abs(easedDepth - depth) < 0.02 ? depth : easedDepth;
-    if (visibleDepth !== appliedDepth) {
-      city.setDepth(visibleDepth);
-      appliedDepth = visibleDepth;
+    if (!reducedMotion.matches || following || states.get(mode).story) elapsed += dt;
+    const state = states.get(mode);
+    const eased = damp(state.visibleValue, state.value, 6.2, dt);
+    state.visibleValue = reducedMotion.matches || Math.abs(eased - state.value) < 0.025 ? state.value : eased;
+    const { model, motion } = activeWorld;
+    if (mode === 'building') {
+      model.update(dt, elapsed, state.visibleValue / 100, state.visibleValue > 3 ? state.selected : null);
+    } else if (mode === 'atlas') {
+      model.update(dt, elapsed);
+    } else {
+      if (activeWorld.appliedDepth !== state.visibleValue) {
+        model.setDepth(state.visibleValue);
+        activeWorld.appliedDepth = state.visibleValue;
+      }
+      model.update?.(dt, elapsed, state.visibleValue);
+      motion?.update(dt, elapsed, state.visibleValue);
+      if (mode === 'plain') updateRainFeedback();
     }
-    motion.update(dt, elapsed, visibleDepth);
     updateCamera(dt);
-    updateRainFeedback();
+    updatePins();
     renderer.render(scene, camera);
-    loading.hidden = true;
+    if (!rendered) {
+      elements.loading.hidden = true;
+      rendered = true;
+    }
   }
 
-  new IntersectionObserver(([entry]) => { showing = entry.isIntersecting; }).observe(viewport);
+  resize();
+  new ResizeObserver(resize).observe(elements.viewport);
+  new IntersectionObserver(([entry]) => { showing = entry.isIntersecting; }).observe(elements.viewport);
   document.addEventListener('visibilitychange', () => { last = 0; });
   canvas.addEventListener('webglcontextlost', event => {
     event.preventDefault();
     cancelAnimationFrame(renderFrame);
-    loading.textContent = '3D 画面已暂停。刷新页面可以重新打开街区。';
-    loading.hidden = false;
+    elements.loading.textContent = '3D 画面已暂停。刷新页面可以重新打开。';
+    elements.loading.hidden = false;
   });
-  setDepth(depth);
+  setMode(readRoute());
   renderFrame = requestAnimationFrame(frame);
 }
 
@@ -286,5 +494,5 @@ try {
   start();
 } catch (error) {
   console.error(error);
-  loading.textContent = '未能打开 3D 场景。请尝试启用浏览器硬件加速后刷新。';
+  elements.loading.textContent = '未能打开 3D 场景。请尝试启用浏览器硬件加速后刷新。';
 }
