@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101821">
+  <meta name="description" content="拉开一条街的地面，在交互式 3D 剖面中跟随列车与雨水。">
+  <title>切开城市 · City Cutaway</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="header">
+      <div class="identity">
+        <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div>
+          <h1>切开城市</h1>
+          <div class="wordmark" lang="en">CITY CUTAWAY</div>
+        </div>
+      </div>
+      <a class="source" href="https://github.com/Elcongroo/city-cutaway" target="_blank" rel="noopener">GitHub 源码</a>
+    </header>
+
+    <section class="stage" aria-label="可旋转的三维城市剖面">
+      <div id="viewport" class="viewport"></div>
+      <div class="intro">
+        <p class="intro-title">街道下面，<br>还有一座城。</p>
+        <p class="intro-hint">拖动深度滑块，<br class="desktop-break">看看地面下有什么。</p>
+      </div>
+      <div class="depth-rail" aria-label="剖面层级">
+        <span class="rail-caption">跳到</span>
+        <button type="button" data-depth="0"><span class="rail-dot road"></span>街面</button>
+        <button type="button" data-depth="7"><span class="rail-dot drain"></span>排水</button>
+        <button type="button" data-depth="14" aria-current="true"><span class="rail-dot metro"></span>地铁</button>
+        <button type="button" data-depth="24"><span class="rail-dot earth"></span>基岩</button>
+      </div>
+      <div class="camera-tools" aria-label="镜头">
+        <button type="button" id="follow" aria-pressed="false"><span class="button-icon train-icon" aria-hidden="true"></span><span id="follow-label">跟拍地铁</span></button>
+        <button type="button" id="reset-view" class="reset-view" title="重置视角" aria-label="重置视角"><span aria-hidden="true">⌖</span></button>
+      </div>
+      <div id="layer-status" class="layer-status"><span class="rail-dot metro" aria-hidden="true"></span><span id="layer-name">地铁隧道</span></div>
+      <div class="gesture-hint">拖动旋转 · 滚轮缩放</div>
+      <p id="loading" class="loading" role="status">正在搭建街区…</p>
+      <noscript><p class="loading">启用 JavaScript 后即可进入 3D 街区。</p></noscript>
+    </section>
+
+    <div class="dock" aria-label="剖面与降雨控制">
+      <section class="depth-control" aria-label="剖面深度">
+        <div class="control-heading">
+          <label for="depth">剖面深度</label>
+          <output id="depth-value" for="depth">14 <small>m</small></output>
+        </div>
+        <input type="range" id="depth" min="0" max="24" step="1" value="14" aria-valuetext="地下 14 米">
+        <div class="scale" aria-hidden="true"><span>地表</span><span>6 m</span><span>12 m</span><span>18 m</span><span>24 m</span></div>
+      </section>
+      <section class="rain-control" aria-label="降雨实验">
+        <div class="control-heading rain-heading">
+          <span>降雨实验</span>
+          <span id="rain-status" class="experiment-status" role="status">观察雨水如何进入排水管</span>
+        </div>
+        <div class="experiment-buttons">
+          <button type="button" id="rain" aria-pressed="false"><span class="button-icon rain-icon" aria-hidden="true">☂</span><span id="rain-label">开始下雨</span></button>
+          <button type="button" id="garden" aria-pressed="false"><span class="button-icon garden-icon" aria-hidden="true">✿</span><span>雨水花园</span></button>
+          <button type="button" id="replay" disabled><span class="button-icon replay-icon" aria-hidden="true">↻</span><span>重放</span></button>
+        </div>
+        <progress id="rain-progress" max="1" value="0" aria-label="降雨演示进度"></progress>
+      </section>
+    </div>
+
+    <footer>虚构街区 · 深度和水流为演示示意</footer>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
