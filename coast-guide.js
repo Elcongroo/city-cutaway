@@ -1,8 +1,8 @@
 export const destinations = {
   atlas: {
     label: '全域总览',
-    title: '从山谷到海港',
-    intro: '从山谷飞越两岸天际线，沿河一直看到外海。也可以潜入江底，跟着一列地铁过江。',
+    title: '水从山里来，城市一路长到海边',
+    intro: '越过峡谷水库、两岸城区和潮滩，再到外海断崖。江底还有一座会报警的泵站。',
     focus: [0, 5, 2], span: 274, yaw: 0.34, pitch: 0.53, accent: '#d0edce',
     question: '一条河能串起什么？',
     detail: '山谷来水穿过农田和两岸城区，接上城中湖，最后汇入海湾。点画面上的地点，镜头会沿着这片地形飞过去。',
@@ -14,6 +14,23 @@ export const destinations = {
     focus: [-84, 11, -34], span: 99, yaw: 0.27, pitch: 0.57, accent: '#f4d79d',
     question: '山坡上怎么给房子找平地？',
     detail: '道路顺坡迂回，街坊落在地势较平的平台。沿同一条路往低处走，山地聚落就接上了谷地和河流。',
+  },
+  reservoir: {
+    label: '峡谷水库',
+    title: '峡谷里，两段水面有高差',
+    intro: '从上游宽水面飞到坝前，再顺着下游的河道往城里走。',
+    focus: [-285, 15, -9], span: 151, yaw: 0.43, pitch: 0.57, accent: '#bfe9ef',
+    question: '坝前和坝后为什么看起来像两条河？',
+    detail: '坝上游蓄起较高的水面。坝旁的溢洪道让多余的水流到下游。顺着下游往前，还能看船闸怎样让船跨过水位差。',
+    source: ['美国垦务局 · 溢洪道', 'https://www.usbr.gov/gp/nepa/cip/activity_descriptions.html'],
+  },
+  lock: {
+    label: '河谷船闸',
+    title: '船也可以坐水上的电梯',
+    intro: '一艘船从下游进闸，闸室里的水慢慢抬高船身。',
+    focus: [-220, 2, 4], span: 96, yaw: 0.55, pitch: 0.59, accent: '#ffdf99',
+    question: '船怎么从较低的水面过到较高的水面？',
+    detail: '通过两座闸门之间的闸室，水位升到与上游齐平后，船就能驶出去。可以打开「船怎么爬坡」逐步观察。',
   },
   rural: {
     label: '河谷农田',
@@ -71,6 +88,23 @@ export const destinations = {
     question: '走到海上，什么还在组织交通？',
     detail: '船从港池驶向开阔水域，航道把港口和远处的海上运输接起来。远离码头后，留给转向和会船的空间更开阔。',
   },
+  tide: {
+    label: '入海潮滩',
+    title: '刚才还是陆地，现在是浅海',
+    intro: '从上空看潮沟把湿地切出细纹，动手改变水位看海水从哪里先漫上来。',
+    focus: [224, 3, 97], span: 113, yaw: 0.33, pitch: 0.67, accent: '#bce5ae',
+    question: '为什么港口附近有一片时隐时现的地面？',
+    detail: '潮间带介于较高和较低的潮位之间，潮水升降时会交替淹没和露出。较低的潮沟常先见到进来的水。',
+  },
+  cliffs: {
+    label: '外海断崖',
+    title: '海边也有向上看的地形',
+    intro: '飞到港湾之外，沿着岬角和离岸岩柱看陡峭的海岸剖面。',
+    focus: [294, 14, -8], span: 157, yaw: 0.39, pitch: 0.45, accent: '#ffd5a6',
+    question: '开阔海边的岸线，为什么跟河边截然不同？',
+    detail: '找找海拱和旁边的孤立岩柱。海浪沿岩石薄弱的地方侵蚀，先可能形成海拱，拱顶坍塌后能留下岩柱。飞回河口就能比较平缓的潮滩。',
+    source: ['美国国家公园管理局 · 岩质海岸地貌', 'https://home.nps.gov/articles/rocky-coast-landforms.htm'],
+  },
   building: {
     label: '建筑拆解',
     title: '就在这条街上，拆开一栋楼',
@@ -96,7 +130,7 @@ export const buildingParts = {
   foundation: { label: '基础', question: '整栋楼的重量最后落在哪？', detail: '梁、柱和承重墙把重量逐层向下传，基础把力传给更大的地面范围。' },
 };
 
-export const tourStops = ['hill', 'rural', 'lake', 'skyline', 'plain', 'river', 'harbor', 'offshore'];
+export const tourStops = ['reservoir', 'lock', 'hill', 'rural', 'lake', 'skyline', 'plain', 'river', 'harbor', 'tide', 'cliffs'];
 
 export const experiments = {
   hill: { play: '点亮山路', stop: '隐藏山路', note: '沿亮线看山路如何转弯爬坡' },

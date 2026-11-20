@@ -1,7 +1,8 @@
-import { buildingParts, destinations, underground } from './coast-guide.js?v=20261120.5';
+import { buildingParts, destinations, underground } from './coast-guide.js?v=20261120.6';
+import { drawPumpStudy, drawWaterStudy } from './coast-map-studies.js';
 
 const TAU = Math.PI * 2;
-const WORLD = { left: -235, right: 235, north: -164, south: 128 };
+const WORLD = { left: -336, right: 336, north: -164, south: 139 };
 const FACES = ['#c2ccbe', '#a9bebe', '#b9cbc6', '#d1c9ad', '#aebfc9'];
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const mix = (a, b, t) => a + (b - a) * t;
@@ -13,6 +14,8 @@ const waterAt = (x, z) => x > coastX(z) || Math.abs(z - riverZ(x)) < riverRadius
   || (z > -46 && z < riverZ(x) && Math.abs(x - (37.8 + 3.2 * Math.sin((z + 45) / 18))) < 3);
 const project = (x, z, altitude = 0) => [x + 0.26 * z, 0.7 * z + 0.059 * x - 0.75 * altitude];
 const anchors = [
+  ['reservoir', -279, 16, 25],
+  ['lock', -203, 10.2, 12],
   ['hill', -86, -45, 24],
   ['rural', -105, 45, 0],
   ['lake', 24, -42, 1],
@@ -21,6 +24,8 @@ const anchors = [
   ['river', 6, riverZ(6), 0],
   ['harbor', 88, 57, 1],
   ['offshore', 170, 40, 0],
+  ['cliffs', 289, 12, 29],
+  ['tide', 219, 102, 4],
   ['building', -34, -21, 10],
 ];
 
@@ -113,9 +118,9 @@ function road(ctx, points, night, principal = false) {
 
 function makeAtlas(night) {
   const backing = document.createElement('canvas');
-  const rasterScale = 3.1;
-  const x0 = -289, y0 = -172;
-  const width = 568, height = 296;
+  const rasterScale = 2.7;
+  const x0 = -389, y0 = -194;
+  const width = 780, height = 344;
   backing.width = Math.ceil(width * rasterScale);
   backing.height = Math.ceil(height * rasterScale);
   const ctx = backing.getContext('2d');
@@ -145,7 +150,7 @@ function makeAtlas(night) {
   const coastalBank = curves(north, south, 3, z => [coastX(z), z]);
   plot(ctx, [[left, north], ...coastalBank, [left, south]], landShade, night ? '#59847e' : '#9ad1ba', 0.87);
 
-  for (const [cx, cz, rx, rz] of [[174, -113, 15, 12], [211, -126, 10, 8]]) {
+  for (const [cx, cz, rx, rz] of [[174, -113, 15, 12], [211, -126, 10, 8], [285,-9,31,29], [305,-51,18,28], [306,22,7,6], [326,18,4.5,6.3]]) {
     const outline = curves(0, TAU, 0.22, a => {
       const landform = 1 + Math.sin(a * 3 + 1.2) * 0.16;
       return [cx + Math.cos(a) * rx * landform, cz + Math.sin(a) * rz * landform];
@@ -157,6 +162,7 @@ function makeAtlas(night) {
   }
 
   const peaks = [
+    [-301, -40, 42, 38, 58], [-282, 45, 42, 29, 56], [-322, -12, 16, 29, 41],
     [-182, -102, 38, 36, 44], [-149, -67, 41, 36, 33], [-113, -79, 41, 30, 32], [-99, -46, 27, 29, 29],
     [-70, -68, 36, 30, 25], [-187, -47, 35, 32, 34], [-158, -29, 31, 28, 21], [-55, -41, 23, 28, 15],
   ];
@@ -184,6 +190,19 @@ function makeAtlas(night) {
   const riverR = curves(69, left, 2, x => [x, riverZ(x) + riverRadius(x)]);
   plot(ctx, [...riverL, ...riverR], night ? '#24586d' : '#4f9c9e', night ? '#69bac67e' : '#b1ded183', 0.7);
   plot(ctx, curves(left + 10, 92, 2, x => [x, riverZ(x)]), null, night ? '#65a8b95b' : '#d1efe889', 0.56);
+  plot(ctx, [[-332,1,19],[-314,-16,21],[-287,-12,21],[-267,3,21],[-258,12,21],
+    [-259,27,21],[-284,37,21],[-321,31,21]], night ? '#285c76' : '#65a9ba', night ? '#4d8387' : '#a3dade', 1.1);
+  plot(ctx, [[-258,-2,23],[-258,29,23],[-258,29,4],[-258,-2,4]], night ? '#60726b' : '#abae92', '#c2d1b6', 0.6);
+  plot(ctx, [[-258,18,20],[-250,17,11],[-235,riverZ(-235),0.2]], null, '#b7e4df', 2.35);
+  plot(ctx, [[-222,6,2],[-184,6,2],[-184,16,2],[-222,16,2]], '#328c9e', '#d7c89a', 1);
+  plot(ctx, [[-222,6,2],[-222,16,8]], null, '#e5c983', 2);
+  plot(ctx, [[-184,6,2],[-184,16,8]], null, '#e5c983', 2);
+  for (let band = 0; band < 8; band++) {
+    plot(ctx, curves(193, 249, 3, x => [x, 87 + band * 4.2 + 4 * Math.sin(x * .13 + band * .42)]),
+      null, band % 2 ? '#a5ae71' : '#7c9b70', 3.3);
+  }
+  plot(ctx, [[194,123],[209,109],[219,103],[232,87],[245,80]], null, '#72c6ca', 2.2);
+  plot(ctx, [[261,-30,10],[272,-13,21],[287,0,29],[300,7,13]], null, '#f1c7a5', 1.3);
   plot(ctx, curves(-44, riverZ(38), 1.6, z => [37.8 + 3.2 * Math.sin((z + 45) / 18), z]), null, night ? '#4da1b7' : '#5ea2a2', 5);
   plot(ctx, curves(0, TAU, 0.14, a => [25 + 16 * Math.cos(a), -43 + 11 * Math.sin(a)]), night ? '#286174' : '#559ca0', night ? '#83bd9c' : '#c9e2a2', 0.91);
 
@@ -522,14 +541,14 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
   const experiments = new Set();
   let mode = 'atlas', depth = 0, expansion = 0, night = false, following = false, discover = null, selectedPart;
   let width = 1, height = 1, ratio = 1, frameId = 0, shown = true, atlas, lastFrame = 0;
-  let garden = false, rainStart = null, renderedTime = 0;
+  let garden = false, rainStart = null, renderedTime = 0, pumpTelemetry = null;
   const touches = new Map();
 
   function resetView(immediate = false) {
     const destination = destinations[mode] || destinations.atlas;
     const [x, y, z] = destination.focus;
     const [px, py] = project(x, z, y * 0.39);
-    const overall = Math.min(width / 551, height / 290) * 1.03;
+    const overall = Math.min(width / 740, height / 318) * 1.03;
     target.x = mode === 'atlas' ? 8 : px;
     target.y = mode === 'atlas' ? -16 : py;
     target.zoom = mode === 'atlas' ? overall : Math.min(width / (destination.span * 1.35), height / (destination.span * 0.68));
@@ -568,7 +587,8 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
     const centerY = height * (width < 600 ? 0.56 : 0.54);
     const transform = (x, y) => [width * 0.5 + (x - camera.x) * camera.zoom, centerY + (y - camera.y) * camera.zoom];
     const [originX, originY] = transform(atlas.x0, atlas.y0);
-    ctx.globalAlpha = mode === 'river' || mode === 'building' ? 0.40 : 1;
+    const study = discover?.id === 'tide' || discover?.id === 'lock';
+    ctx.globalAlpha = mode === 'river' || mode === 'building' || study ? 0.42 : 1;
     ctx.drawImage(atlas.backing, originX, originY, atlas.width * camera.zoom, atlas.height * camera.zoom);
     ctx.globalAlpha = 1;
     if (experiments.has(mode) && trails[mode]) {
@@ -597,8 +617,12 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
       hits.push({ id, feature, x: bx - 3, y: by - 3, width: boxW + 6, height: boxH + 6 });
     }
 
-    if (mode === 'river') drawSection(ctx, width, height, depth, time, following, discover, label);
+    if (mode === 'river' && discover?.id === 'pump' && pumpTelemetry) {
+      drawSection(ctx, width, height, depth, time, following, null, () => {});
+      drawPumpStudy(ctx, width, height, pumpTelemetry, time);
+    } else if (mode === 'river') drawSection(ctx, width, height, depth, time, following, discover, label);
     else if (mode === 'building') drawBuilding(ctx, width, height, expansion, time, discover, label);
+    else if (study) drawWaterStudy(ctx, width, height, discover.id, discover.amount, time);
     else {
       for (const [key, x, z, elevation] of anchors) {
         if (key === mode || (key === 'building' && mode !== 'plain' && mode !== 'lake')) continue;
@@ -646,8 +670,8 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
       if (old > 3 && next > 3) zoom(next / old);
     } else if (touches.size === 1 && pointer.traveled > 4) {
       if (!pointer.moving) { pointer.moving = true; onInteract(); }
-      target.x = clamp(target.x - dx / camera.zoom, -205, 245);
-      target.y = clamp(target.y - dy / camera.zoom, -138, 126);
+      target.x = clamp(target.x - dx / camera.zoom, -353, 358);
+      target.y = clamp(target.y - dy / camera.zoom, -162, 141);
       canvas.style.cursor = 'grabbing';
     }
   }
@@ -669,7 +693,7 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
   }
   function zoom(factor) {
     if (mode === 'river' || mode === 'building') return;
-    target.zoom = clamp(target.zoom * factor, width / 760, width / 35);
+    target.zoom = clamp(target.zoom * factor, width / 1040, width / 35);
   }
   function onWheel(event) {
     if (mode === 'river' || mode === 'building') return;
@@ -687,8 +711,8 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
     else if (key === '-') zoom(0.8);
     else if (mode !== 'river' && mode !== 'building') {
       const nudge = 14 / camera.zoom;
-      target.x = clamp(target.x + (key === 'ArrowRight' ? nudge : key === 'ArrowLeft' ? -nudge : 0), -205, 245);
-      target.y = clamp(target.y + (key === 'ArrowDown' ? nudge : key === 'ArrowUp' ? -nudge : 0), -138, 126);
+      target.x = clamp(target.x + (key === 'ArrowRight' ? nudge : key === 'ArrowLeft' ? -nudge : 0), -353, 358);
+      target.y = clamp(target.y + (key === 'ArrowDown' ? nudge : key === 'ArrowUp' ? -nudge : 0), -162, 141);
     }
   }
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -733,6 +757,7 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
       discover = id && state !== null && state !== undefined && Number.isFinite(amount)
         ? { id, amount: clamp(amount / 100, 0, 1) } : null;
     },
+    setPump(telemetry) { pumpTelemetry = telemetry; },
     selectPart(id) { selectedPart = id; },
     setFollowing(value) { following = Boolean(value); },
     resetView,

@@ -5,8 +5,10 @@ import { createCoastCity } from './coast-city.js';
 import { createCoastInfrastructure } from './coast-infrastructure.js';
 import { createCoastExperiments } from './coast-effects.js';
 import { createCoastExpansion } from './coast-expansion.js';
-import { createCoastDiscover } from './coast-discover.js';
-import { destinations, underground, buildingParts } from './coast-guide.js?v=20261120.5';
+import { createCoastDiscover } from './coast-discover.js?v=20261120.6';
+import { createCoastLandforms } from './coast-landforms.js';
+import { createCoastWaterworks } from './coast-waterworks.js';
+import { destinations, underground, buildingParts } from './coast-guide.js?v=20261120.6';
 
 const { clamp, damp, lerp, degToRad } = THREE.MathUtils;
 
@@ -55,10 +57,14 @@ export function createCoast3D(container, options) {
   const scene = new THREE.Scene();
   const dayFog = new THREE.Color(0x648193);
   const nightFog = new THREE.Color(0x233552);
+  const sunsetFog = new THREE.Color(0x776b77);
   scene.fog = new THREE.FogExp2(dayFog, 0.00078);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 3700);
   const daySky = new THREE.Color(0xe5f2ff);
   const nightSky = new THREE.Color(0x788bbd);
+  const sunsetSky = new THREE.Color(0xaebfe6);
+  const goldenSun = new THREE.Color(0xffbf80);
+  const daySun = new THREE.Color(0xffe5bf);
   const ambient = new THREE.HemisphereLight(daySky, 0x8b8277, 2);
   const sun = new THREE.DirectionalLight(0xffe5bf, 2.8);
   sun.position.set(-95, 160, 74);
@@ -66,7 +72,7 @@ export function createCoast3D(container, options) {
   fill.position.set(98, 53, -94);
   scene.add(ambient, sun, fill);
 
-  let terrain, city, infrastructure, experiment, expansionWorld, discover, building;
+  let terrain, city, infrastructure, experiment, expansionWorld, discover, building, landforms, waterworks;
   const property = new THREE.Group();
   const propertyGround = groundY(-34, -27);
   property.position.set(-34, propertyGround, -27);
@@ -77,6 +83,8 @@ export function createCoast3D(container, options) {
     infrastructure = createCoastInfrastructure(scene);
     experiment = createCoastExperiments(scene);
     expansionWorld = createCoastExpansion(scene);
+    landforms = createCoastLandforms(scene);
+    waterworks = createCoastWaterworks(scene);
     discover = createCoastDiscover(scene);
     building = createBuilding(property);
     building.update(0, 0, 0, null);
@@ -103,12 +111,22 @@ export function createCoast3D(container, options) {
     ['harbor', city.landmarks.harbor.clone().add(new THREE.Vector3(0, 5, 0))],
     ['skyline', new THREE.Vector3(0, 47, -114)],
     ['offshore', new THREE.Vector3(165, 7, 24)],
+    ['reservoir', landforms.landmarks.reservoir.clone()],
+    ['cliffs', landforms.landmarks.cliffs.clone()],
+    ['lock', waterworks.landmarks.lock.clone()],
+    ['tide', waterworks.landmarks.tide.clone()],
     ['building', new THREE.Vector3(-34, propertyGround + 14, -27)],
   ];
   const casesAt = {
-    pump: [15.5, -17.5, 8.8, 43, -0.35, 0.74],
+    pump: [9, -21, 9, 34, -0.29, 0.68],
     air: [20, -17, 8, 60, -0.33, 0.70],
     load: [-34, propertyGround + 9, -27, 39, 0.41, 0.35],
+  };
+  const pumpPoints = {
+    inlet: [8, -19.9, 3.8],
+    well: [6.7, -22.5, 8.5],
+    pumps: [12.3, -22.2, 10.3],
+    outlet: [14.5, -17.7, 6.5],
   };
   const current = { focus: new THREE.Vector3(), span: 485, yaw: 0.34, pitch: 0.54 };
   const desired = { ...current, focus: new THREE.Vector3() };
@@ -123,6 +141,8 @@ export function createCoast3D(container, options) {
   let opened = 0;
   let night = false;
   let nightLevel = 0;
+  let sunset = false;
+  let sunsetLevel = 0;
   let selected;
   let activeCase;
   let following = false;
@@ -146,8 +166,15 @@ export function createCoast3D(container, options) {
     const profile = destinations[id];
     const focus = new THREE.Vector3(...profile.focus);
     if (id === 'atlas') {
-      focus.set(0, 9, -14);
-      return { focus, span: 500, yaw: 0.34, pitch: 0.60 };
+      focus.set(-3, 12, -9);
+      return { focus, span: 684, yaw: 0.29, pitch: 0.54 };
+    }
+    if (id === 'lock') return { focus: new THREE.Vector3(-202, 9.2, 10.2), span: 118, yaw: 0.36, pitch: 0.63 };
+    if (id === 'tide') return { focus: new THREE.Vector3(217, 1.5, 105), span: 105, yaw: 0.24, pitch: 0.72 };
+    if (id === 'reservoir' || id === 'cliffs') {
+      const landmark = landforms.landmarks[id];
+      focus.set(landmark.x, landmark.y * 0.68, landmark.z - (id === 'cliffs' ? 27 : 7));
+      return { focus, span: id === 'reservoir' ? 128 : 139, yaw: id === 'reservoir' ? -0.36 : 0.36, pitch: id === 'reservoir' ? 0.62 : 0.56 };
     }
     if (id === 'building') focus.y += propertyGround + 1.2;
     return { focus, span: profile.span, yaw: profile.yaw, pitch: profile.pitch };
@@ -320,14 +347,20 @@ export function createCoast3D(container, options) {
       cut = nextCut;
       opened = nextOpen;
       nightLevel = reduced.matches ? Number(night) : damp(nightLevel, Number(night), 3, dt);
-      ambient.color.copy(daySky).lerp(nightSky, nightLevel);
-      ambient.intensity = lerp(2, 0.92, nightLevel);
-      sun.intensity = lerp(2.8, 0.23, nightLevel);
-      fill.intensity = lerp(1.31, 0.88, nightLevel);
-      scene.fog.color.copy(dayFog).lerp(nightFog, nightLevel);
+      sunsetLevel = reduced.matches ? Number(sunset) : damp(sunsetLevel, Number(sunset), 3, dt);
+      ambient.color.copy(daySky).lerp(sunsetSky, sunsetLevel).lerp(nightSky, nightLevel);
+      ambient.intensity = lerp(lerp(2, 1.30, sunsetLevel), 0.92, nightLevel);
+      sun.color.copy(daySun).lerp(goldenSun, sunsetLevel);
+      sun.position.y = lerp(160, 52, sunsetLevel);
+      sun.intensity = lerp(lerp(2.8, 2.92, sunsetLevel), 0.23, nightLevel);
+      fill.intensity = lerp(lerp(1.31, 1.08, sunsetLevel), 0.88, nightLevel);
+      renderer.toneMappingExposure = lerp(1.19, 1.06, sunsetLevel);
+      scene.fog.color.copy(dayFog).lerp(sunsetFog, sunsetLevel).lerp(nightFog, nightLevel);
       terrain.update(dt, elapsed);
       city.update(dt, elapsed);
       expansionWorld.update(dt, elapsed);
+      landforms.update(dt, elapsed);
+      waterworks.update(dt, elapsed);
       infrastructure.update(dt, elapsed, cut);
       experiment.update(dt, elapsed);
       discover.setBuilding(opened);
@@ -440,7 +473,10 @@ export function createCoast3D(container, options) {
       terrain.setNight(value);
       city.setNight(value);
       expansionWorld.setNight(value);
+      landforms.setNight(value);
+      waterworks.setNight?.(value);
     },
+    setSunset(value) { sunset = value; },
     setExperiment(id, active) {
       surfaceExperiment = active;
       experiment.set(id, active);
@@ -451,11 +487,23 @@ export function createCoast3D(container, options) {
     setDiscover(id, level, changeView = true) {
       const prior = activeCase;
       activeCase = id;
-      discover.setCase(id, level);
+      const waterStudy = id === 'tide' || id === 'lock';
+      discover.setCase(waterStudy ? null : id, level);
+      if (waterStudy) {
+        waterworks.setStudy(id, level / 100);
+        return;
+      }
       if (changeView && id && prior !== id) {
         const [x, y, z, span, yaw, pitch] = casesAt[id];
         fly({ focus: new THREE.Vector3(x, y, z), span, yaw, pitch });
       } else if (changeView && prior && !id) resetView();
+    },
+    setPump(telemetry) { discover.setPump(telemetry); },
+    setPumpStage(id) {
+      const point = pumpPoints[id];
+      if (activeCase !== 'pump') return;
+      const [x, y, z] = point || [9, -21, 9];
+      fly({ focus: new THREE.Vector3(x, y, z), span: point ? 26 : 34, yaw: -0.29, pitch: 0.68 });
     },
     setFollowing(active) {
       if (active) {

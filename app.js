@@ -1,19 +1,34 @@
-import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.5';
-import { cases } from './coast-cases.js';
+import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.6';
+import { cases } from './coast-cases.js?v=20261120.6';
+import { createPumpRun, pumpDefaults } from './pump-model.js';
 
 const ui = Object.fromEntries([
-  'app', 'viewport', 'loading', 'places', 'scene-title', 'scene-intro', 'night', 'reset-view', 'fullscreen',
+  'app', 'viewport', 'loading', 'places', 'scene-title', 'scene-intro', 'night', 'sunset', 'reset-view', 'fullscreen',
   'tour', 'cut-cta', 'view-status', 'zoom-in', 'zoom-out', 'angle', 'use-3d', 'use-map', 'render-note',
   'controls', 'slider-panel', 'range-label', 'range-value', 'depth', 'scale', 'follow', 'experiment-panel',
   'experiment-note', 'experiment', 'garden', 'replay', 'rain-progress', 'guide-heading', 'guide-copy',
   'features', 'case-buttons', 'case-panel', 'case-label', 'case-level', 'case-value', 'case-feedback',
-  'case-source', 'share', 'share-result', 'share-field', 'share-location',
+  'case-source', 'share', 'share-result', 'share-field', 'share-location', 'study-steps',
+  'pump-meter', 'pump-water', 'pump-height', 'pump-indicators', 'pump-storm', 'pump-primary', 'pump-auto',
+  'pump-lab', 'pump-inflow', 'pump-inflow-value', 'pump-stages', 'pump-reset',
 ].map(id => [id, document.getElementById(id)]));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const maximumDepth = 30;
 const nav = [...ui.places.querySelectorAll('[data-route]')];
 const choices = [...ui['case-buttons'].querySelectorAll('[data-case]')];
 const activeExperiments = new Map();
+const pumpSettings = { ...pumpDefaults };
+const pumpRun = createPumpRun();
+const pumpParts = {
+  inlet: { label: '进水沟', title: '水是怎么找到集水井的？', intro: '沟道利用高差，把坡道和路面的来水引到低处。进水变大时，井里开始存水。' },
+  well: { label: '集水井', title: '泵启动之前，水先存在哪？', intro: '集水井提供一段蓄水空间。水位传感器可以触发泵的控制。这个模型里，备用泵在高水位接管。' },
+  pumps: { label: '主泵 / 备用泵', title: '主泵停了，排水为什么还能继续？', intro: '还有一台备用泵可以排水。试试把主泵停掉，对比备用自动开启和关闭时的水位。' },
+  outlet: { label: '止回阀 / 出水管', title: '水抽上去以后，会自己流回井里吗？', intro: '止回阀用来阻止倒流。泵停止后，排水管里的水就有了一道单向关口。' },
+};
+const practice = {
+  lock: [[16, '船入闸'], [31, '关下闸'], [63, '升水位'], [100, '驶出']],
+  tide: [[0, '低潮'], [50, '中潮'], [100, '高潮']],
+};
 const failureCopy = {
   'no-webgl2': '这个浏览器未能提供 WebGL 2，已切换到互动地图。',
   'context-lost': '浏览器的 3D 环境中断，已切换到互动地图。',
@@ -35,11 +50,15 @@ let expansion = 0;
 let selected;
 let following = false;
 let night = false;
+let sunset = true;
 let garden = false;
 let tourIndex = -1;
 let tourTimer;
 let playbackId;
+let playbackTime = 0;
 let features = [];
+let pumpStage = null;
+let stepCase;
 
 function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.round(value)));
@@ -72,11 +91,13 @@ function refreshRange() {
 function renderGuide() {
   const profile = destinations[mode];
   const discovery = cases[caseId];
+  const pumpDetail = caseId === 'pump' ? pumpParts[pumpStage] : undefined;
   const item = detailSet()[selected];
-  ui['guide-heading'].textContent = discovery?.title || item?.question || profile.question;
-  ui['guide-copy'].textContent = discovery?.intro || item?.detail || profile.detail;
-  ui['case-source'].hidden = !discovery;
-  if (discovery) [ui['case-source'].textContent, ui['case-source'].href] = discovery.source;
+  ui['guide-heading'].textContent = pumpDetail?.title || discovery?.title || item?.question || profile.question;
+  ui['guide-copy'].textContent = pumpDetail?.intro || discovery?.intro || item?.detail || profile.detail;
+  const source = discovery?.source || profile.source;
+  ui['case-source'].hidden = !source;
+  if (source) [ui['case-source'].textContent, ui['case-source'].href] = source;
   for (const [id, node] of features) node.setAttribute('aria-pressed', id === selected && !caseId);
 }
 
@@ -87,13 +108,22 @@ function renderCase() {
   if (caseId) ui.app.dataset.case = caseId;
   else delete ui.app.dataset.case;
   ui['case-panel'].hidden = !discovery;
+  ui['pump-meter'].hidden = ui['pump-lab'].hidden = caseId !== 'pump';
+  ui['study-steps'].hidden = !practice[caseId];
   for (const node of choices) node.setAttribute('aria-pressed', node.dataset.case === caseId);
   if (discovery) {
     ui['case-label'].textContent = discovery.control;
     inputValue(ui['case-level'], ui['case-value'], level, '%', discovery.control + ' ' + level + '%');
-    const neutral = caseId === 'pump' && level >= 49 && level <= 51;
-    const message = neutral ? '排水泵以中等速度工作' : (level < 50 ? discovery.low : discovery.high);
+    let message = level < 50 ? discovery.low : discovery.high;
+    if (caseId === 'pump') message = pumpSettings.primary ? '主泵功率可调，进水强度在下方' : '主泵已停，看看备用泵会怎样';
+    if (caseId === 'lock') message = level < 22 ? '下游闸门打开，船进入闸室' : level < 35 ? '下游闸门正在关闭'
+      : level < 73 ? '闸室注水，船随水位上升' : level < 87 ? '水位齐平，上游闸门开启' : '小船驶向上游';
     if (ui['case-feedback'].textContent !== message) ui['case-feedback'].textContent = message;
+  }
+  if (caseId === 'pump') updatePumpControls();
+  if (stepCase !== caseId) {
+    stepCase = caseId;
+    ui['study-steps'].replaceChildren(...(practice[caseId] || []).map(([value, label]) => makeButton(label, () => changeCaseLevel(value))));
   }
   renderGuide();
 }
@@ -138,6 +168,43 @@ function renderControls() {
   refreshRange();
   refreshExperiment();
   renderCase();
+}
+
+const pumpStageButtons = Object.entries(pumpParts).map(([id, item]) => {
+  const node = makeButton(item.label, () => {
+    pumpStage = pumpStage === id ? null : id;
+    throughView('setPumpStage', pumpStage);
+    renderCase();
+    writeLocation(true);
+  });
+  return [id, node];
+});
+ui['pump-stages'].replaceChildren(...pumpStageButtons.map(([, node]) => node));
+
+function updatePumpControls() {
+  inputValue(ui['pump-inflow'], ui['pump-inflow-value'], pumpSettings.inflow, '%', '进水强度 ' + pumpSettings.inflow + '%');
+  ui['pump-primary'].setAttribute('aria-pressed', pumpSettings.primary);
+  ui['pump-primary'].textContent = pumpSettings.primary ? '主泵运行' : '主泵已停';
+  ui['pump-auto'].setAttribute('aria-pressed', pumpSettings.automatic);
+  ui['pump-auto'].textContent = pumpSettings.automatic ? '备用自动' : '备用关闭';
+  for (const [id, node] of pumpStageButtons) node.setAttribute('aria-pressed', id === pumpStage);
+}
+
+function pumpFrame(dt) {
+  pumpSettings.power = level;
+  const results = pumpRun.step(dt, pumpSettings, pumpStage);
+  throughView('setPump', results);
+  const percentage = Math.round(results.level * 100);
+  if (Number(ui['pump-water'].value) !== percentage) {
+    ui['pump-water'].value = percentage;
+    ui['pump-height'].value = percentage + '%';
+  }
+  const alarm = String(results.alarm);
+  if (ui['pump-meter'].dataset.alarm !== alarm) ui['pump-meter'].dataset.alarm = alarm;
+  const states = results.alarm ? '高水位警报' : '水位正常';
+  const status = (results.main ? '主泵运行' : '主泵停转') + ' · '
+    + (results.backup ? '备用泵已接管' : pumpSettings.automatic ? '备用待命' : '备用关闭') + ' · ' + states;
+  if (ui['pump-indicators'].textContent !== status) ui['pump-indicators'].textContent = status;
 }
 
 function resetAngle() {
@@ -211,11 +278,20 @@ function parseLocation() {
   const discovery = Object.hasOwn(cases, found) ? cases[found] : null;
   const rawLevel = url.searchParams.get('level');
   const numeric = rawLevel !== null ? Number(rawLevel) : NaN;
+  const rawInflow = url.searchParams.get('inflow');
+  const inflow = rawInflow === null ? pumpDefaults.inflow : Number(rawInflow);
+  const stage = url.searchParams.get('pump');
   return {
     mode: discovery?.mode || (Object.hasOwn(destinations, request) ? request : 'atlas'),
     caseId: discovery ? found : undefined,
     level: Number.isFinite(numeric) ? clamp(numeric, 0, 100) : discovery?.initial,
     format: url.searchParams.get('view') === 'map' ? 'map' : undefined,
+    pump: {
+      inflow: Number.isFinite(inflow) ? clamp(inflow, 0, 100) : pumpDefaults.inflow,
+      primary: url.searchParams.get('main') !== 'off',
+      automatic: url.searchParams.get('backup') !== 'off',
+    },
+    stage: Object.hasOwn(pumpParts, stage) ? stage : null,
   };
 }
 
@@ -225,6 +301,12 @@ function link() {
   if (caseId) {
     url.searchParams.set('case', caseId);
     url.searchParams.set('level', String(level));
+  }
+  if (caseId === 'pump') {
+    if (pumpSettings.inflow !== pumpDefaults.inflow) url.searchParams.set('inflow', String(pumpSettings.inflow));
+    if (!pumpSettings.primary) url.searchParams.set('main', 'off');
+    if (!pumpSettings.automatic) url.searchParams.set('backup', 'off');
+    if (pumpStage) url.searchParams.set('pump', pumpStage);
   }
   if (pinnedFormat === 'map') url.searchParams.set('view', 'map');
   return url;
@@ -237,6 +319,7 @@ function writeLocation(replace = false) {
 
 function closeCase() {
   caseId = undefined;
+  pumpStage = null;
   throughView('setDiscover', null, 0);
   renderCase();
   writeLocation(true);
@@ -247,10 +330,12 @@ function applyStateToView(adapter, immediate) {
   adapter.setDepth(depth);
   adapter.setExpansion(expansion);
   adapter.setNight(night);
+  adapter.setSunset?.(sunset && !night);
   adapter.setExperiment(mode, Boolean(activeExperiments.get(mode)));
   adapter.setGarden?.(garden);
   adapter.selectPart?.(selected, false);
   adapter.setDiscover(caseId || null, level, Boolean(caseId));
+  if (caseId === 'pump' && pumpStage) adapter.setPumpStage?.(pumpStage);
   adapter.setFollowing?.(following);
 }
 
@@ -290,6 +375,11 @@ function chooseCase(id) {
     closeCase();
     return;
   }
+  if (id === 'pump') {
+    Object.assign(pumpSettings, pumpDefaults);
+    pumpRun.reset();
+    pumpStage = null;
+  }
   enter(cases[id].mode, id, cases[id].initial);
   writeLocation();
   ui.viewport.parentElement?.scrollIntoView({ block: 'nearest', behavior: reduceMotion.matches ? 'instant' : 'smooth' });
@@ -321,6 +411,7 @@ function setFormatUI(kind, reason = '') {
   ui['use-3d'].setAttribute('aria-pressed', is3D);
   ui['use-map'].setAttribute('aria-pressed', !is3D);
   ui.angle.hidden = typeof activeView?.adapter.toggleAngle !== 'function';
+  ui.sunset.hidden = typeof activeView?.adapter.setSunset !== 'function';
   resetAngle();
   ui['zoom-in'].hidden = ui['zoom-out'].hidden = typeof activeView?.adapter.zoom !== 'function';
   ui['render-note'].hidden = !reason;
@@ -354,11 +445,11 @@ async function mount(kind, note = '') {
       },
     };
     if (kind === '3d') {
-      const { createCoast3D } = await import('./coast-3d.js?v=20261120.5.1');
+      const { createCoast3D } = await import('./coast-3d.js?v=20261120.6');
       if (edition !== pendingVersion) { layer.remove(); return; }
       adapter = createCoast3D(layer, options);
     } else {
-      const { createCoastMap } = await import('./coast-map.js');
+      const { createCoastMap } = await import('./coast-map.js?v=20261120.6');
       if (edition !== pendingVersion) { layer.remove(); return; }
       adapter = createCoastMap(layer, options);
     }
@@ -416,6 +507,9 @@ function refreshLocation() {
   const state = parseLocation();
   const oldFormat = pinnedFormat;
   pinnedFormat = state.format;
+  Object.assign(pumpSettings, pumpDefaults, state.pump);
+  pumpStage = state.stage;
+  pumpRun.reset();
   enter(state.mode, state.caseId, state.level);
   if (state.format !== oldFormat && activeView?.kind !== (state.format || '3d')) mount(state.format || '3d');
 }
@@ -424,12 +518,30 @@ window.addEventListener('popstate', refreshLocation);
 
 for (const node of nav) node.addEventListener('click', () => navigate(node.dataset.route));
 for (const node of choices) node.addEventListener('click', () => chooseCase(node.dataset.case));
-ui['case-level'].addEventListener('input', () => {
+function changeCaseLevel(value) {
   if (!caseId) return;
-  level = clamp(Number(ui['case-level'].value), 0, 100);
+  level = clamp(Number(value), 0, 100);
   throughView('setDiscover', caseId, level, false);
   renderCase();
   writeLocation(true);
+}
+ui['case-level'].addEventListener('input', () => changeCaseLevel(ui['case-level'].value));
+function revisePump(settings) {
+  if (caseId !== 'pump') return;
+  Object.assign(pumpSettings, settings);
+  renderCase();
+  writeLocation(true);
+}
+ui['pump-inflow'].addEventListener('input', () => revisePump({ inflow: clamp(Number(ui['pump-inflow'].value), 0, 100) }));
+ui['pump-storm'].addEventListener('click', () => revisePump({ inflow: pumpSettings.inflow === 95 ? 55 : 95 }));
+ui['pump-primary'].addEventListener('click', () => revisePump({ primary: !pumpSettings.primary }));
+ui['pump-auto'].addEventListener('click', () => revisePump({ automatic: !pumpSettings.automatic }));
+ui['pump-reset'].addEventListener('click', () => {
+  pumpRun.reset();
+  pumpStage = null;
+  throughView('setPumpStage', null);
+  revisePump(pumpDefaults);
+  changeCaseLevel(pumpDefaults.power);
 });
 ui.depth.addEventListener('input', () => {
   stopTour();
@@ -450,12 +562,21 @@ ui.tour.addEventListener('click', () => {
   nextTourStop();
 });
 ui.follow.addEventListener('click', () => setFollowing(!following));
-ui.night.addEventListener('click', () => {
-  night = !night;
+function renderLight() {
   ui.app.dataset.night = String(night);
-  ui.night.textContent = night ? '日景' : '夜景';
+  ui.app.dataset.sunset = String(sunset && !night);
+  ui.night.textContent = night ? '结束夜景' : '夜景';
+  ui.sunset.textContent = sunset && !night ? '日景' : '夕照';
   ui.night.setAttribute('aria-pressed', night);
+  ui.sunset.setAttribute('aria-pressed', sunset && !night);
   throughView('setNight', night);
+  throughView('setSunset', sunset && !night);
+}
+ui.night.addEventListener('click', () => { night = !night; renderLight(); });
+ui.sunset.addEventListener('click', () => {
+  sunset = night || !sunset;
+  night = false;
+  renderLight();
 });
 ui.experiment.addEventListener('click', () => {
   stopTour();
@@ -497,8 +618,11 @@ document.addEventListener('fullscreenchange', () => {
   ui.fullscreen.title = name;
 });
 
-function playback() {
+function playback(now) {
   playbackId = requestAnimationFrame(playback);
+  const dt = playbackTime && !document.hidden ? (now - playbackTime) / 1000 : 0;
+  playbackTime = now;
+  if (caseId === 'pump') pumpFrame(dt);
   if (mode === 'plain') ui['rain-progress'].value = throughView('progress') || 0;
 }
 
@@ -512,6 +636,9 @@ window.addEventListener('pagehide', event => {
 
 const initial = parseLocation();
 pinnedFormat = initial.format;
+Object.assign(pumpSettings, initial.pump);
+pumpStage = initial.stage;
+renderLight();
 enter(initial.mode, initial.caseId, initial.level, { immediate: true });
 mount(pinnedFormat || '3d');
 playbackId = requestAnimationFrame(playback);

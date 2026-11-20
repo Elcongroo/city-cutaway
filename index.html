@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0d151d">
-  <meta name="description" content="飞过一座海湾城市，然后亲手试试江底怎么排水、隧道怎么换气、一栋楼怎么把重量交给地面。">
+  <meta name="description" content="从峡谷水库飞到潮滩和外海断崖，亲手试试泵站、船闸、潮水、隧道换气和建筑传力。">
   <meta property="og:title" content="切开城市｜你每天经过的地方，底下还有什么？">
   <meta property="og:description" content="一座可以飞过去、切开看、亲手做实验的海湾城市。">
   <title>切开城市 · City Cutaway</title>
-  <link rel="stylesheet" href="./style.css?v=20261120.5">
+  <link rel="stylesheet" href="./style.css?v=20261120.6">
 </head>
 <body>
   <main id="app" class="shell" data-mode="atlas">
@@ -21,6 +21,7 @@
     </header>
     <nav id="places" class="places" aria-label="飞往区域">
       <button data-route="atlas" type="button" aria-current="page">全域总览</button>
+      <button data-route="reservoir" type="button">峡谷水库</button>
       <button data-route="hill" type="button">山谷</button>
       <button data-route="rural" type="button">河谷农田</button>
       <button data-route="lake" type="button">城中湖</button>
@@ -28,21 +29,34 @@
       <button data-route="skyline" type="button">北岸新城</button>
       <button data-route="river" type="button" class="section-tab">江底剖面</button>
       <button data-route="harbor" type="button">入海港湾</button>
+      <button data-route="tide" type="button">入海潮滩</button>
       <button data-route="offshore" type="button">外海航道</button>
+      <button data-route="cliffs" type="button">外海断崖</button>
       <button data-route="building" type="button" class="building-tab">建筑拆解</button>
     </nav>
 
+    <section class="discover-bar discovery-rail" aria-label="看不见的城市">
+      <h2>看不见的城市</h2>
+      <div id="case-buttons" class="case-buttons">
+        <button data-case="pump" aria-pressed="false" type="button"><small>泵站</small><span>江底的水往哪走？</span></button>
+        <button data-case="lock" aria-pressed="false" type="button"><small>船闸</small><span>船怎么爬坡？</span></button>
+        <button data-case="tide" aria-pressed="false" type="button"><small>潮滩</small><span>哪片陆地会消失？</span></button>
+        <button data-case="air" aria-pressed="false" type="button"><small>通风</small><span>隧道的风哪来的？</span></button>
+        <button data-case="load" aria-pressed="false" type="button"><small>建筑</small><span>屋顶的重量去哪了？</span></button>
+      </div>
+    </section>
     <section class="stage" aria-label="可探索的海湾城市">
       <div id="viewport" class="viewport"></div>
       <div class="view-heading">
-        <h2 id="scene-title">从山谷到海港</h2>
-        <p id="scene-intro">沿着一条河飞过农田、湖泊和两岸城区，再从江面潜入城市的地下。</p>
+        <h2 id="scene-title">水从山里来，城市一路长到海边</h2>
+        <p id="scene-intro">越过峡谷水库、两岸城区和潮滩，再到外海断崖。江底还有一座会报警的泵站。</p>
       </div>
       <div class="camera-tools" aria-label="画面">
         <div class="formats" aria-label="渲染方式">
           <button id="use-3d" type="button" aria-pressed="true">3D</button>
           <button id="use-map" type="button" aria-pressed="false">地图</button>
         </div>
+        <button type="button" id="sunset" aria-pressed="false">夕照</button>
         <button type="button" id="night" aria-pressed="false">夜景</button>
         <button type="button" id="reset-view" aria-label="重置视角" title="重置视角">⌖</button>
         <button type="button" id="fullscreen" aria-label="全屏" title="全屏">⛶</button>
@@ -60,6 +74,17 @@
         <div class="control-heading"><label id="case-label" for="case-level"></label><output id="case-value" for="case-level"></output></div>
         <input id="case-level" type="range" min="0" max="100" step="1" value="45">
         <p id="case-feedback" class="case-feedback" aria-live="polite"></p>
+        <div id="study-steps" class="study-steps" hidden></div>
+        <div id="pump-meter" class="pump-meter" hidden>
+          <div class="control-heading"><span>集水井水位</span><output id="pump-height">42%</output></div>
+          <meter id="pump-water" aria-label="集水井水位" min="0" max="100" low="65" high="81" optimum="0" value="42"></meter>
+          <div id="pump-indicators" class="pump-indicators" aria-live="polite"></div>
+          <div class="study-steps pump-actions">
+            <button type="button" id="pump-storm">模拟暴雨</button>
+            <button type="button" id="pump-primary" aria-pressed="true">主泵运行</button>
+            <button type="button" id="pump-auto" aria-pressed="true">备用自动</button>
+          </div>
+        </div>
       </div>
       <div id="view-status" class="view-status" aria-live="polite"></div>
       <div class="gesture-hint" aria-hidden="true"><span class="mouse">拖动画面 · 滚轮缩放</span><span class="touch">拖动画面 · 双指缩放</span></div>
@@ -68,19 +93,16 @@
     </section>
 
     <div class="below-stage">
-      <section class="discover-bar" aria-label="看不见的城市">
-        <h2>看不见的城市</h2>
-        <div id="case-buttons" class="case-buttons">
-          <button data-case="pump" aria-pressed="false" type="button">江底的水往哪走</button>
-          <button data-case="air" aria-pressed="false" type="button">隧道里看不见的风</button>
-          <button data-case="load" aria-pressed="false" type="button">一栋楼怎么把重量交给地面</button>
-        </div>
-      </section>
-
       <div id="render-note" class="render-note" role="status" hidden></div>
 
       <div class="dock">
         <section class="controls" id="controls" aria-label="当前交互" hidden>
+          <div id="pump-lab" class="pump-lab" hidden>
+            <div class="control-heading"><label for="pump-inflow">进水强度</label><output id="pump-inflow-value" for="pump-inflow">55%</output></div>
+            <input type="range" id="pump-inflow" min="0" max="100" step="1" value="55">
+            <div id="pump-stages" class="features" aria-label="跟着水走"></div>
+            <button type="button" id="pump-reset" class="secondary-action">重置泵站</button>
+          </div>
           <div id="slider-panel" hidden>
             <div class="control-heading"><label id="range-label" for="depth">剖面深度</label><output id="range-value" for="depth">0 m</output></div>
             <input id="depth" type="range" min="0" max="30" step="1" value="0">
