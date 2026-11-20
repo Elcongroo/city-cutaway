@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101821">
-  <meta name="description" content="漫游不同地形上的街区，拆开建筑，看看一座城是怎么搭起来的。">
+  <meta name="theme-color" content="#0d151d">
+  <meta name="description" content="从山谷飞入海港，在同一座 3D 城市里切开江底、跟拍地铁、拆解建筑。">
   <title>切开城市 · City Cutaway</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <main id="app" class="shell">
+  <main id="app" class="shell" data-mode="atlas">
     <header class="header">
       <div class="identity">
         <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -17,64 +17,66 @@
       </div>
       <a class="source" href="https://github.com/Elcongroo/city-cutaway" target="_blank" rel="noopener">GitHub 源码</a>
     </header>
-
-    <nav id="places" class="places" aria-label="选择场景">
-      <button type="button" data-route="atlas" aria-current="page">区域总览</button>
-      <button type="button" data-route="plain">平原城区</button>
-      <button type="button" data-route="river">河湾城区</button>
-      <button type="button" data-route="hill">山地城镇</button>
-      <button type="button" data-route="rural">农田村落</button>
-      <button type="button" data-route="building" class="building-link"><span aria-hidden="true">▥</span> 建筑拆解</button>
+    <nav id="places" class="places" aria-label="飞往区域">
+      <button data-route="atlas" type="button" aria-current="page">全域总览</button>
+      <button data-route="hill" type="button">山谷</button>
+      <button data-route="rural" type="button">河谷农田</button>
+      <button data-route="lake" type="button">城中湖</button>
+      <button data-route="plain" type="button">两岸城区</button>
+      <button data-route="river" type="button" class="section-tab">江底剖面</button>
+      <button data-route="harbor" type="button">入海港湾</button>
+      <button data-route="building" type="button" class="building-tab">建筑拆解</button>
     </nav>
 
-    <div class="workspace">
-      <section class="stage" aria-label="可旋转的三维模型">
-        <div id="viewport" class="viewport"></div>
-        <div class="view-heading"><h2 id="scene-title">一座城，四种地形。</h2><p id="scene-intro"></p></div>
-        <div id="pins" class="pins" aria-label="模型中的地点"></div>
-        <div class="camera-tools" aria-label="镜头">
-          <button type="button" id="follow" aria-pressed="false" hidden>跟拍地铁</button>
-          <button type="button" id="reset-view" class="reset-view" aria-label="重置视角" title="重置视角">⌖</button>
-        </div>
-        <div id="scene-state" class="scene-state" aria-live="polite" hidden></div>
-        <div class="gesture-hint" aria-hidden="true"><span class="mouse-hint">拖动旋转 · 滚轮缩放</span><span class="touch-hint">拖动旋转 · 双指缩放</span></div>
-        <p id="loading" class="loading" role="status">正在搭建场景…</p>
-        <noscript><p class="loading">启用 JavaScript 后即可打开 3D 模型。</p></noscript>
-      </section>
-
-      <div class="controls" id="controls" hidden>
-        <section class="depth-control" aria-label="剖面或拆解控制">
-          <div class="control-heading"><label id="depth-label" for="depth">剖面深度</label><output id="depth-value" for="depth">14 m</output></div>
-          <input type="range" id="depth" min="0" max="24" step="1" value="14">
-          <div class="scale" id="scale" aria-hidden="true"></div>
-        </section>
-        <section class="rain-control" id="rain-control" aria-label="降雨实验" hidden>
-          <div class="control-heading rain-heading"><span>降雨实验</span><span id="rain-status" class="experiment-status" role="status"></span></div>
-          <div class="experiment-buttons">
-            <button type="button" id="rain" aria-pressed="false">开始下雨</button>
-            <button type="button" id="garden" aria-pressed="false">雨水花园</button>
-            <button type="button" id="replay" disabled>重放</button>
-          </div>
-          <progress id="rain-progress" max="1" value="0" aria-label="降雨演示进度"></progress>
-        </section>
+    <section class="stage" aria-label="连续的三维滨海城市">
+      <div id="viewport" class="viewport"></div>
+      <div class="view-heading">
+        <h2 id="scene-title">从山谷到海港</h2>
+        <p id="scene-intro">沿着一条河飞过农田、湖泊和两岸城区，再从江面潜入城市的地下。</p>
       </div>
+      <div id="pins" class="pins" aria-label="三维地图定位点"></div>
+      <div class="camera-tools" aria-label="画面">
+        <button type="button" id="night" aria-pressed="false">夜景</button>
+        <button type="button" id="reset-view" aria-label="重置视角" title="重置视角">⌖</button>
+        <button type="button" id="fullscreen" aria-label="全屏" title="全屏">⛶</button>
+      </div>
+      <div class="flight-controls" aria-label="浏览方式">
+        <button type="button" id="cut-cta" class="primary-action">切开江底</button>
+        <button type="button" id="tour" aria-pressed="false">沿江巡游</button>
+      </div>
+      <div id="view-status" class="view-status" aria-live="polite"></div>
+      <div class="gesture-hint" aria-hidden="true"><span class="mouse">拖动旋转 · 滚轮缩放</span><span class="touch">拖动旋转 · 双指缩放</span></div>
+      <p id="loading" class="loading" role="status">正在搭建海湾城市…</p>
+      <noscript><p class="loading">启用 JavaScript 后即可打开 3D 城市。</p></noscript>
+    </section>
 
+    <div class="dock">
+      <section class="controls" id="controls" aria-label="当前交互" hidden>
+        <div id="slider-panel" hidden>
+          <div class="control-heading"><label id="range-label" for="depth">剖面深度</label><output id="range-value" for="depth">0 m</output></div>
+          <input id="depth" type="range" min="0" max="30" step="1" value="0">
+          <div class="scale" id="scale" aria-hidden="true"></div>
+          <button type="button" id="follow" class="secondary-action" aria-pressed="false" hidden>跟拍地铁</button>
+        </div>
+        <div id="experiment-panel" hidden>
+          <div class="control-heading"><span>观察实验</span><span id="experiment-note" class="experiment-note" role="status"></span></div>
+          <div class="experiment-actions">
+            <button type="button" id="experiment" class="secondary-action" aria-pressed="false"></button>
+            <button type="button" id="garden" class="secondary-action" aria-pressed="false" hidden>雨水花园</button>
+            <button type="button" id="replay" class="secondary-action" hidden disabled>重放</button>
+          </div>
+          <progress id="rain-progress" max="1" value="0" aria-label="降雨演示进度" hidden></progress>
+        </div>
+      </section>
       <aside class="guide" aria-labelledby="guide-heading">
-        <div class="guide-body">
-          <p id="guide-label" class="guide-label">看懂一座城</p>
-          <h3 id="guide-heading">出门以后，路是怎么接起来的？</h3>
-          <p id="guide-copy" class="guide-copy">从山坡出发，沿着河流经过桥梁、街区和村道，看看同一片区域里，地形如何改变人走的路、水流的方向和房子的位置。</p>
-          <div id="features" class="features" aria-label="观察位置"></div>
-          <button id="story" class="primary-action" type="button" aria-pressed="false" hidden></button>
-          <button id="building-cta" class="primary-action" type="button">拆解一栋临街楼</button>
+        <div class="guide-copy">
+          <h3 id="guide-heading">一条河能串起什么？</h3>
+          <p id="guide-copy">山谷来水经过农田和两岸城区，接上城中湖，最后汇入海湾。</p>
         </div>
-        <div class="guide-foot">
-          <a id="reference" target="_blank" rel="noopener" hidden></a>
-          <span>虚构区域 · 规划原理示意</span>
-        </div>
+        <div id="features" class="features" aria-label="观察位置"></div>
       </aside>
     </div>
-    <footer>建筑、地形和水流为简化模型</footer>
+    <footer>虚构海湾城市 · 地形、设施尺寸与深度为演示示意</footer>
   </main>
   <script type="module" src="./app.js"></script>
 </body>

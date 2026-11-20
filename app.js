@@ -1,19 +1,20 @@
 import * as THREE from './vendor/three.module.js';
-import { createCity } from './scene.js';
-import { createMotion } from './motion.js';
-import { createAtlas } from './atlas.js';
-import { createDistrict } from './districts.js';
 import { createBuilding } from './building.js';
-import { guide } from './guide.js';
+import { createCoastTerrain, groundY, riverZ } from './coast-terrain.js';
+import { createCoastCity } from './coast-city.js';
+import { createCoastInfrastructure } from './coast-infrastructure.js';
+import { createCoastExperiments } from './coast-effects.js';
+import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js';
 
-const elements = Object.fromEntries([
-  'app', 'viewport', 'loading', 'places', 'pins', 'controls', 'depth', 'depth-label', 'depth-value', 'scale',
-  'scene-title', 'scene-intro', 'scene-state', 'follow', 'reset-view', 'rain-control', 'rain',
-  'garden', 'replay', 'rain-progress', 'rain-status', 'guide-heading', 'guide-label',
-  'guide-copy', 'features', 'story', 'reference', 'building-cta',
+const ui = Object.fromEntries([
+  'app', 'viewport', 'loading', 'places', 'pins', 'scene-title', 'scene-intro', 'night', 'reset-view', 'fullscreen',
+  'tour', 'cut-cta', 'view-status', 'controls', 'slider-panel', 'range-label', 'range-value', 'depth', 'scale',
+  'follow', 'experiment-panel', 'experiment-note', 'experiment', 'garden', 'replay', 'rain-progress',
+  'guide-heading', 'guide-copy', 'features',
 ].map(id => [id, document.getElementById(id)]));
-const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-const { clamp, damp } = THREE.MathUtils;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const { clamp, damp, lerp, degToRad } = THREE.MathUtils;
+const maximumDepth = 30;
 
 function start() {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
@@ -21,472 +22,579 @@ function start() {
   renderer.localClippingEnabled = true;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.24;
+  renderer.toneMappingExposure = 1.17;
   const canvas = renderer.domElement;
-  elements.viewport.append(canvas);
+  ui.viewport.append(canvas);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, 245);
-  scene.add(new THREE.HemisphereLight(0xdbedff, 0xa27e66, 2.05));
-  const light = new THREE.DirectionalLight(0xffe1bd, 2.55);
-  light.position.set(-20, 38, 28);
-  scene.add(light);
-  const rim = new THREE.DirectionalLight(0x99c5ff, 1.48);
-  rim.position.set(23, 18, -29);
-  scene.add(rim);
+  const dayFog = new THREE.Color(0x5b788a);
+  const nightFog = new THREE.Color(0x263551);
+  scene.fog = new THREE.FogExp2(dayFog, 0.00091);
+  const camera = new THREE.PerspectiveCamera(41, 1, 0.3, 2300);
+  const daySky = new THREE.Color(0xe3f4ff);
+  const nightSky = new THREE.Color(0x788ac4);
+  const ambient = new THREE.HemisphereLight(daySky, 0x8b8277, 2.1);
+  const sun = new THREE.DirectionalLight(0xffe3b8, 2.65);
+  sun.position.set(-95, 160, 74);
+  const fill = new THREE.DirectionalLight(0x9bc8fa, 1.35);
+  fill.position.set(98, 53, -94);
+  scene.add(ambient, sun, fill);
 
-  const worlds = new Map();
-  const states = new Map(Object.entries(guide).map(([id, profile]) => [
-    id,
-    {
-      value: id === 'building' ? 0 : 14,
-      visibleValue: id === 'building' ? 0 : 14,
-      selected: Object.keys(profile.features || {})[0],
-      story: false,
-    },
-  ]));
-  const routeButtons = [...elements.places.querySelectorAll('[data-route]')];
-  const look = new THREE.Vector3();
-  const nextLook = new THREE.Vector3();
-  const cameraOffset = new THREE.Vector3();
-  const train = new THREE.Vector3();
-  const projected = new THREE.Vector3();
-  const view = { yaw: 0.37, pitch: 0.60, zoom: 1, actualYaw: 0.37, actualPitch: 0.60, actualZoom: 1 };
-  let mode = 'atlas';
-  let activeWorld;
-  let activePins = [];
-  let featureButtons = new Map();
-  let focusedFeature;
-  let width = 1;
-  let height = 1;
-  let aspect = 1;
-  let following = false;
-  let raining = false;
-  let garden = false;
-  let elapsed = 0;
-  let last = 0;
-  let renderFrame = 0;
-  let showing = true;
-  let rendered = false;
-
-  function ensureWorld(id) {
-    if (worlds.has(id)) return worlds.get(id);
-    const layer = new THREE.Group();
-    layer.visible = false;
-    let model;
-    let motion;
-    if (id === 'atlas') {
-      model = createAtlas(layer);
-    } else if (id === 'plain') {
-      const city = createCity(layer);
-      motion = createMotion(layer);
-      model = {
-        setDepth: city.setDepth,
-        hotspots: [
-          { id: 'street', position: new THREE.Vector3(-7.1, 0.85, 3.5) },
-          { id: 'pipes', position: new THREE.Vector3(7.5, -1.18, 8.3), minimumDepth: 6 },
-          { id: 'metro', position: new THREE.Vector3(-7.7, -4.5, 8.5), minimumDepth: 12 },
-          { id: 'building', position: new THREE.Vector3(0.8, 6.2, -0.3) },
-        ],
-      };
-    } else if (id === 'building') {
-      model = createBuilding(layer);
-    } else {
-      model = createDistrict(layer, id);
-    }
-    const result = { layer, model, motion };
-    worlds.set(id, result);
-    scene.add(layer);
-    return result;
+  const terrain = createCoastTerrain(scene);
+  const city = createCoastCity(scene);
+  const infrastructure = createCoastInfrastructure(scene);
+  const experiment = createCoastExperiments(scene);
+  for (const material of city.cutMaterials || []) {
+    material.clippingPlanes = terrain.cutPlanes;
+    material.clipIntersection = true;
   }
 
-  function placeButton(label, action) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = label;
-    button.addEventListener('click', action);
-    return button;
+  const property = new THREE.Group();
+  const propertyGround = groundY(-34, -27);
+  property.position.set(-34, propertyGround, -27);
+  scene.add(property);
+  const building = createBuilding(property);
+  building.update(0, 0, 0, null);
+
+  const places = [
+    ['hill', new THREE.Vector3(-93, groundY(-93, -37) + 3.7, -37)],
+    ['rural', new THREE.Vector3(-83, groundY(-83, 43) + 3.3, 43)],
+    ['lake', city.landmarks.lake.clone().add(new THREE.Vector3(0, 2.2, 0))],
+    ['plain', city.landmarks.northSkyline.clone().add(new THREE.Vector3(0, 3, 0))],
+    ['river', new THREE.Vector3(8, 2.4, riverZ(8) + 5)],
+    ['harbor', city.landmarks.harbor.clone()],
+    ['building', new THREE.Vector3(-34, propertyGround + 14.0, -27)],
+  ];
+
+  const current = {
+    focus: new THREE.Vector3(),
+    span: destinations.atlas.span,
+    yaw: destinations.atlas.yaw,
+    pitch: destinations.atlas.pitch,
+  };
+  const desired = { ...current, focus: new THREE.Vector3() };
+  const offset = new THREE.Vector3();
+  const projected = new THREE.Vector3();
+  const anchor = new THREE.Vector3();
+  const train = new THREE.Vector3();
+  const nav = [...ui.places.querySelectorAll('[data-route]')];
+  const activeExperiments = new Map();
+
+  let mode;
+  let selected;
+  let depth = 0;
+  let cut = 0;
+  let expansion = 0;
+  let opened = 0;
+  let night = false;
+  let nightLevel = 0;
+  let following = false;
+  let garden = false;
+  let pins = [];
+  let featureButtons = [];
+  let flight;
+  let tour;
+  let time = 0;
+  let last = 0;
+  let showing = true;
+  let rendering = true;
+  let renderFrame = 0;
+  let width = 1;
+  let height = 1;
+
+  function poseFor(id) {
+    const profile = destinations[id];
+    const focus = new THREE.Vector3(...profile.focus);
+    if (id === 'building') focus.y += propertyGround;
+    return { focus, span: profile.span, yaw: profile.yaw, pitch: profile.pitch };
+  }
+
+  function blendPose(target, amount) {
+    current.focus.lerp(target.focus, amount);
+    current.span = lerp(current.span, target.span, amount);
+    current.yaw = lerp(current.yaw, target.yaw, amount);
+    current.pitch = lerp(current.pitch, target.pitch, amount);
+  }
+
+  function flyTo(target, immediate = false) {
+    desired.focus.copy(target.focus);
+    desired.span = target.span;
+    desired.yaw = target.yaw;
+    desired.pitch = target.pitch;
+    if (immediate || reduceMotion.matches) {
+      flight = undefined;
+      blendPose(desired, 1);
+      return;
+    }
+    const distance = current.focus.distanceTo(target.focus);
+    flight = {
+      from: { ...current, focus: current.focus.clone() },
+      spanLift: clamp(distance * 0.27, 3, 44),
+      heightLift: clamp(distance * 0.098, 1.2, 19),
+      duration: clamp(0.88 + distance * 0.0084 + Math.abs(current.span - target.span) * 0.003, 0.92, 2.5),
+      time: 0,
+    };
+  }
+
+  function updateCamera(dt) {
+    if (following) {
+      infrastructure.getTrainPosition(train);
+      desired.focus.set(train.x * 0.67 + 3, train.y + 5.2, clamp(train.z, -15, 48));
+    }
+    if (flight) {
+      flight.time = Math.min(flight.duration, flight.time + dt);
+      const fraction = flight.time / flight.duration;
+      const ease = fraction * fraction * (3 - 2 * fraction);
+      const arc = Math.sin(Math.PI * ease);
+      current.focus.lerpVectors(flight.from.focus, desired.focus, ease);
+      current.focus.y += arc * flight.heightLift;
+      current.span = lerp(flight.from.span, desired.span, ease) + arc * flight.spanLift;
+      current.yaw = lerp(flight.from.yaw, desired.yaw, ease);
+      current.pitch = lerp(flight.from.pitch, desired.pitch, ease);
+      if (fraction >= 1) {
+        flight = undefined;
+        updateStatus();
+      }
+    } else {
+      const easing = reduceMotion.matches ? 1 : 1 - Math.exp(-dt * 7);
+      blendPose(desired, easing);
+    }
+
+    const halfVertical = Math.tan(degToRad(camera.fov / 2));
+    const distance = Math.max(current.span / camera.aspect, current.span * 0.55) / (2 * halfVertical);
+    const horizontal = Math.cos(current.pitch) * distance;
+    offset.set(Math.sin(current.yaw) * horizontal, Math.sin(current.pitch) * distance, Math.cos(current.yaw) * horizontal);
+    camera.position.copy(current.focus).add(offset);
+    const increase = Math.max(0, groundY(camera.position.x, camera.position.z) + 4 - camera.position.y);
+    camera.position.y += increase;
+    camera.lookAt(current.focus);
+    camera.updateMatrixWorld();
+  }
+
+  function button(label, action) {
+    const node = document.createElement('button');
+    node.type = 'button';
+    node.textContent = label;
+    node.addEventListener('click', action);
+    return node;
+  }
+
+  function detailSet() {
+    if (mode === 'river') return underground;
+    if (mode === 'building') return buildingParts;
+    return {};
   }
 
   function updateGuide() {
-    const profile = guide[mode];
-    const state = states.get(mode);
-    if (mode === 'atlas') {
-      elements['guide-label'].textContent = '看懂一座城';
-      elements['guide-heading'].textContent = '出门以后，路是怎么接起来的？';
-      elements['guide-copy'].textContent = '从山坡出发，沿着河流经过桥梁、街区和村道，看看同一片区域里，地形如何改变人走的路、水流的方向和房子的位置。';
-    } else {
-      const feature = profile.features[state.selected];
-      elements['guide-label'].textContent = feature.name;
-      elements['guide-heading'].textContent = feature.question;
-      elements['guide-copy'].textContent = feature.answer;
-    }
-    for (const [id, button] of featureButtons) button.setAttribute('aria-pressed', id === state.selected);
-    for (const { hotspot, button } of activePins) {
-      if (profile.features?.[hotspot.id]) button.setAttribute('aria-pressed', hotspot.id === state.selected);
-    }
-    elements.story.hidden = !profile.story;
-    if (profile.story) {
-      elements.story.textContent = state.story ? profile.story.off : profile.story.on;
-      elements.story.setAttribute('aria-pressed', state.story);
-    }
-    const reference = elements.reference;
-    reference.hidden = !profile.source;
-    if (profile.source) {
-      [reference.textContent, reference.href] = profile.source;
-    }
+    const item = detailSet()[selected] || destinations[mode];
+    ui['guide-heading'].textContent = item.question;
+    ui['guide-copy'].textContent = item.detail;
+    for (const [id, node] of featureButtons) node.setAttribute('aria-pressed', selected === id);
+    for (const pin of pins) if (pin.part) pin.node.setAttribute('aria-pressed', selected === pin.id);
   }
 
-  function updateRange(value) {
-    const state = states.get(mode);
-    const isBuilding = mode === 'building';
-    const cap = isBuilding ? 100 : 24;
-    state.value = clamp(Math.round(value), 0, cap);
-    elements.depth.value = state.value;
-    elements.depth.style.setProperty('--fill', (state.value / cap) * 100 + '%');
-    elements['depth-value'].value = state.value + (isBuilding ? '%' : ' m');
-    const label = isBuilding ? '拆解 ' + state.value + '%' : state.value ? '地下 ' + state.value + ' 米' : '地表';
-    elements.depth.setAttribute('aria-valuetext', label);
-    if (mode === 'plain' && state.value < 12 && following) setFollowing(false);
-    updateStateBadge();
-  }
-
-  function updateStateBadge() {
-    const state = states.get(mode);
-    const badge = elements['scene-state'];
-    const profile = guide[mode];
-    let text = '';
-    if (profile.story && state.story) text = profile.story.status;
-    else if (mode === 'building') text = state.value === 0 ? '建筑外观' : state.value < 60 ? '楼层正在展开' : '建筑剖面';
-    else if (mode !== 'atlas') text = state.value ? '地下 ' + state.value + ' m' : '地表';
-    badge.hidden = !text;
-    if (badge.textContent !== text) badge.textContent = text;
-  }
-
-  function selectFeature(id, focus = true) {
-    const profile = guide[mode];
-    const state = states.get(mode);
-    if (!profile.features?.[id]) return;
-    state.selected = id;
-    if (focus) {
-      setFollowing(false);
-      focusedFeature = id;
-      view.zoom = mode === 'building' ? 1.16 : 1.27;
-      if (mode === 'building' && state.value < 66) updateRange(76);
-      if (profile.features[id].depth > state.value) updateRange(profile.features[id].depth);
-    }
+  function selectPart(id) {
+    const item = detailSet()[id];
+    if (!item) return;
+    stopTour();
+    setFollowing(false);
+    selected = id;
+    if (mode === 'river' && depth < item.depth) setDepth(item.depth);
+    if (mode === 'building' && expansion < 72) setExpansion(82);
     updateGuide();
   }
 
-  function renderFeatureControls() {
-    const profile = guide[mode];
-    featureButtons = new Map(Object.entries(profile.features || {}).map(([id, detail]) => [
-      id, placeButton(detail.name, () => selectFeature(id)),
-    ]));
-    elements.features.replaceChildren(...featureButtons.values());
-    activePins = activeWorld.model.hotspots.map(hotspot => {
-      const jumpsToScene = mode === 'atlas' || hotspot.id === 'building';
-      const label = jumpsToScene ? guide[hotspot.id].name : profile.features[hotspot.id].name;
-      const button = placeButton(label, () => {
-        if (jumpsToScene) navigate(hotspot.id);
-        else selectFeature(hotspot.id);
-      });
-      button.className = 'pin';
-      button.hidden = true;
-      if (jumpsToScene) button.style.setProperty('--accent', guide[hotspot.id].accent);
-      return { hotspot, button };
+  function updateStatus() {
+    let message = '';
+    if (following) message = '正在跟拍过江地铁';
+    else if (flight) message = '正在飞往' + destinations[mode].label;
+    else if (mode === 'river' && depth) message = '剖面深度 ' + depth + ' m';
+    else if (tour) message = '沿江巡游 ' + (tour.index + 1) + ' / ' + tourStops.length;
+    if (ui['view-status'].textContent !== message) ui['view-status'].textContent = message;
+  }
+
+  function setupPins() {
+    pins = places
+      .filter(([id]) => id !== mode && (id !== 'building' || mode === 'plain' || mode === 'lake'))
+      .map(([id, point]) => ({ id, point, label: destinations[id].label, color: destinations[id].accent }));
+    if (mode === 'river') {
+      for (const [id, point] of Object.entries(infrastructure.features)) {
+        const item = underground[id];
+        if (item) pins.push({ id, point, label: item.label, color: item.color, part: true, minimum: item.depth - 2 });
+      }
+    }
+    if (mode === 'building') {
+      for (const { id, position } of building.hotspots) {
+        pins.push({ id, point: position, label: buildingParts[id].label, part: true, local: true });
+      }
+    }
+    pins = pins.map(pin => {
+      const node = button(pin.label, () => pin.part ? selectPart(pin.id) : navigate(pin.id));
+      node.className = 'pin';
+      node.hidden = true;
+      if (pin.color) node.style.setProperty('--pin-color', pin.color);
+      return { ...pin, node, labelWidth: 0 };
     });
-    elements.pins.replaceChildren(...activePins.map(({ button }) => button));
+    ui.pins.replaceChildren(...pins.map(pin => pin.node));
+    featureButtons = Object.entries(detailSet()).map(([id, item]) => {
+      const node = button(item.label, () => selectPart(id));
+      if (item.color) node.style.setProperty('--pin-color', item.color);
+      return [id, node];
+    });
+    ui.features.replaceChildren(...featureButtons.map(([, node]) => node));
   }
 
-  function navigate(id) {
-    if (mode === id && activeWorld) return;
-    window.location.hash = id;
+  function renderPins() {
+    const placed = [];
+    for (const pin of pins) {
+      if (following || ((mode === 'river' || mode === 'building') && !pin.part)
+          || (pin.minimum ?? 0) > cut || (pin.local && opened < 0.2 && pin.id !== 'roof')) {
+        pin.node.hidden = true;
+        continue;
+      }
+      anchor.copy(pin.point);
+      if (pin.local) anchor.add(property.position);
+      projected.copy(anchor).project(camera);
+      const outside = Math.abs(projected.x) > 0.98 || Math.abs(projected.y) > 0.91 || Math.abs(projected.z) > 1;
+      pin.node.hidden = outside;
+      if (outside) continue;
+      const labelWidth = pin.labelWidth || (pin.labelWidth = pin.node.offsetWidth);
+      const x = clamp((projected.x + 1) * width / 2, labelWidth / 2 + 5, width - labelWidth / 2 - 5);
+      let y = (1 - projected.y) * height / 2;
+      for (const other of placed) {
+        if (Math.abs(other.x - x) < (other.width + labelWidth) / 2 + 5 && Math.abs(other.y - y) < 33) {
+          y = other.y - 33;
+        }
+      }
+      y = clamp(y, 42, height - (width < 650 ? 52 : 61));
+      placed.push({ x, y, width: labelWidth });
+      pin.node.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0) translate(-50%,calc(-100% - 7px))';
+    }
   }
 
-  function readRoute() {
-    const requested = window.location.hash.slice(1);
-    return Object.hasOwn(guide, requested) ? requested : 'atlas';
+  function refreshRange() {
+    const type = mode === 'building' ? 'building' : 'cut';
+    ui.depth.max = type === 'building' ? 100 : maximumDepth;
+    const value = type === 'building' ? expansion : depth;
+    ui.depth.value = value;
+    ui.depth.style.setProperty('--fill', (value / Number(ui.depth.max)) * 100 + '%');
+    ui['range-value'].value = value + (type === 'building' ? '%' : ' m');
+    ui.depth.setAttribute('aria-valuetext', type === 'building' ? '展开 ' + value + '%' : (value ? '地下 ' + value + ' 米' : '地表'));
+    ui['cut-cta'].textContent = mode === 'river' && depth > 0 ? '合上剖面' : '切开江底';
+    updateStatus();
   }
 
-  function setMode(id) {
-    if (activeWorld && id === mode) return;
-    const world = ensureWorld(id);
-    if (activeWorld) activeWorld.layer.visible = false;
-    activeWorld = world;
-    world.layer.visible = true;
-    mode = id;
-    elements.app.dataset.mode = id;
-    const profile = guide[id];
-    const state = states.get(id);
-    elements.app.style.setProperty('--accent', profile.accent);
-    elements['scene-title'].textContent = profile.title;
-    elements['scene-intro'].textContent = profile.intro;
-    elements.follow.hidden = id !== 'plain';
-    elements.controls.hidden = id === 'atlas';
-    elements['rain-control'].hidden = id !== 'plain';
-    elements['building-cta'].hidden = id !== 'atlas' && id !== 'plain';
-    elements['depth-label'].textContent = id === 'building' ? '建筑展开度' : '剖面深度';
-    elements.depth.max = id === 'building' ? 100 : 24;
-    const scale = id === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['地表', '6 m', '12 m', '18 m', '24 m'];
-    elements.scale.replaceChildren(...scale.map(label => {
+  function setDepth(next) {
+    depth = clamp(Math.round(next), 0, maximumDepth);
+    if (following && depth < 16) setFollowing(false);
+    refreshRange();
+  }
+
+  function setExpansion(next) {
+    expansion = clamp(Math.round(next), 0, 100);
+    refreshRange();
+  }
+
+  function refreshExperiment() {
+    const config = experiments[mode];
+    const enabled = Boolean(activeExperiments.get(mode));
+    const isRain = mode === 'plain';
+    experiment.set(mode, enabled);
+    ui['experiment-panel'].hidden = !config;
+    ui.garden.hidden = !isRain;
+    ui.replay.hidden = !isRain;
+    ui.replay.disabled = !enabled;
+    ui['rain-progress'].hidden = !isRain;
+    ui.experiment.setAttribute('aria-pressed', enabled);
+    if (config) {
+      ui.experiment.textContent = enabled ? config.stop : config.play;
+      ui['experiment-note'].textContent = enabled ? config.note : '';
+    }
+  }
+
+  function refreshMode() {
+    const profile = destinations[mode];
+    ui.app.dataset.mode = mode;
+    ui.app.style.setProperty('--accent', profile.accent);
+    ui['scene-title'].textContent = profile.title;
+    ui['scene-intro'].textContent = profile.intro;
+    const slider = mode === 'river' || mode === 'building';
+    ui['slider-panel'].hidden = !slider;
+    ui.controls.hidden = !slider && !experiments[mode];
+    ui.follow.hidden = mode !== 'river';
+    ui['range-label'].textContent = mode === 'building' ? '建筑展开度' : '剖面深度';
+    const marks = mode === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['江面', '10 m', '20 m', '30 m'];
+    ui.scale.replaceChildren(...marks.map(label => {
       const mark = document.createElement('span');
       mark.textContent = label;
       return mark;
     }));
-    for (const button of routeButtons) {
-      if (id === button.dataset.route) button.setAttribute('aria-current', 'page');
-      else button.removeAttribute('aria-current');
+    for (const node of nav) {
+      if (mode === node.dataset.route) node.setAttribute('aria-current', 'page');
+      else node.removeAttribute('aria-current');
     }
-    updateRange(state.value);
-    resetView();
-    renderFeatureControls();
+    setupPins();
+    refreshExperiment();
+    refreshRange();
     updateGuide();
-    if (profile.story) activeWorld.model.setStory(state.story);
-    if (rendered && !reducedMotion.matches) {
-      elements.viewport.getAnimations().forEach(animation => animation.cancel());
-      elements.viewport.animate([{ opacity: 0.28 }, { opacity: 1 }], { duration: 420, easing: 'ease-out' });
+  }
+
+  function setMode(id, immediate = false) {
+    if (id === mode && !immediate) return;
+    mode = id;
+    following = false;
+    ui.follow.setAttribute('aria-pressed', 'false');
+    ui.follow.textContent = '跟拍地铁';
+    selected = undefined;
+    depth = id === 'river' ? maximumDepth : 0;
+    if (id === 'building') expansion = 58;
+    flyTo(poseFor(id), immediate);
+    refreshMode();
+    updateStatus();
+  }
+
+  function navigate(id, automatic = false) {
+    if (!automatic) stopTour();
+    if (mode === id) return;
+    if (automatic) history.replaceState(null, '', '#' + id);
+    else history.pushState(null, '', '#' + id);
+    setMode(id);
+  }
+
+  function routeFromHash() {
+    const id = window.location.hash.slice(1);
+    return Object.hasOwn(destinations, id) ? id : 'atlas';
+  }
+
+  function stopTour() {
+    if (!tour) return;
+    tour = undefined;
+    ui.tour.textContent = '沿江巡游';
+    ui.tour.setAttribute('aria-pressed', 'false');
+    updateStatus();
+  }
+
+  function updateTour(dt) {
+    if (!tour || flight || following) return;
+    tour.wait += dt;
+    if (tour.wait < (mode === 'river' ? 7 : 4.3)) return;
+    if (++tour.index >= tourStops.length) {
+      stopTour();
+      return;
     }
+    tour.wait = 0;
+    navigate(tourStops[tour.index], true);
   }
 
   function setFollowing(active) {
-    following = active;
-    elements.follow.setAttribute('aria-pressed', active);
-    elements.follow.textContent = active ? '退出跟拍' : '跟拍地铁';
-    if (active && mode === 'plain') {
-      if (states.get('plain').value < 14) updateRange(14);
-      focusedFeature = undefined;
-      selectFeature('metro', false);
+    if (active) {
+      stopTour();
+      if (depth < 16) setDepth(20);
+      selected = 'metro';
+      infrastructure.getTrainPosition(train);
+      const focus = new THREE.Vector3(train.x * 0.67 + 3, train.y + 5.2, clamp(train.z, -15, 48));
+      flyTo({ focus, span: 70, yaw: 0.59, pitch: 0.42 });
+    } else if (following) {
+      flyTo(poseFor(mode));
     }
+    following = active;
+    ui.follow.textContent = active ? '退出跟拍' : '跟拍地铁';
+    ui.follow.setAttribute('aria-pressed', active);
+    updateGuide();
+    updateStatus();
   }
 
   function resetView() {
-    setFollowing(false);
-    focusedFeature = undefined;
-    const { yaw, pitch } = guide[mode];
-    view.yaw = view.actualYaw = yaw;
-    view.pitch = view.actualPitch = pitch;
-    view.zoom = view.actualZoom = 1;
-    look.set(0, guide[mode].y, 0);
+    stopTour();
+    if (following) setFollowing(false);
+    flyTo(poseFor(mode));
+    updateStatus();
   }
 
-  function setRain(active) {
-    raining = active;
-    activeWorld.motion.setRain(active);
-    elements.rain.setAttribute('aria-pressed', active);
-    elements.rain.textContent = active ? '停止下雨' : '开始下雨';
-    elements.replay.disabled = !active;
-    if (active && states.get('plain').value < 8) updateRange(8);
-  }
-
-  function updateRainFeedback() {
-    const progress = raining ? activeWorld.motion.getPhase() : 0;
-    elements['rain-progress'].value = progress;
-    let status = '观察雨水如何进入排水管';
-    if (raining && progress >= 0.8) status = garden ? '花园截留部分径流' : '径流汇入排水管';
-    else if (raining && progress >= 0.4) status = garden ? '雨水流向花园' : '雨水流向雨水口';
-    else if (raining) status = '雨水沿屋顶和路面流动';
-    else if (garden) status = '雨水花园已启用';
-    if (status !== elements['rain-status'].textContent) elements['rain-status'].textContent = status;
-  }
-
-  function resize() {
-    width = Math.max(1, elements.viewport.clientWidth);
-    height = Math.max(1, elements.viewport.clientHeight);
-    aspect = width / height;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, width < 650 ? 1.4 : 1.65));
-    renderer.setSize(width, height, false);
-  }
-
-  function updateCamera(dt) {
-    const profile = guide[mode];
-    const state = states.get(mode);
-    const easing = reducedMotion.matches ? 1 : 1 - Math.exp(-dt * 6);
-    let { yaw, pitch, zoom } = view;
-    const mobile = width < 650;
-    let baseY = profile.y;
-    if (mode === 'building') baseY = (activeWorld.model.focus?.y ?? baseY) + state.visibleValue * 0.016;
-    if (mode === 'atlas') baseY += mobile ? 4.2 : 2.5;
-    if (mobile && mode !== 'atlas') baseY += 2.25;
-    nextLook.set(0, baseY, 0);
-    if (focusedFeature) {
-      const spot = activeWorld.model.hotspots.find(hotspot => hotspot.id === focusedFeature);
-      if (spot) {
-        nextLook.x = spot.position.x * 0.60;
-        nextLook.y = THREE.MathUtils.lerp(baseY, spot.position.y, 0.42);
-        nextLook.z = spot.position.z * 0.36;
-      }
+  function stopCameraFlight() {
+    stopTour();
+    if (following) {
+      following = false;
+      ui.follow.textContent = '跟拍地铁';
+      ui.follow.setAttribute('aria-pressed', 'false');
     }
-    if (following && mode === 'plain') {
-      activeWorld.motion.getTrainPosition(train);
-      nextLook.set(train.x * 0.70, train.y + 1.35, 2);
-      yaw = 0.38;
-      pitch = 0.17;
-      zoom = 1.70;
+    if (flight) {
+      flight = undefined;
+      desired.focus.copy(current.focus);
+      desired.span = current.span;
+      desired.yaw = current.yaw;
+      desired.pitch = current.pitch;
     }
-    look.lerp(nextLook, easing);
-    view.actualYaw = THREE.MathUtils.lerp(view.actualYaw, yaw, easing);
-    view.actualPitch = THREE.MathUtils.lerp(view.actualPitch, pitch, easing);
-    view.actualZoom = THREE.MathUtils.lerp(view.actualZoom, zoom, easing);
-    const radius = 92;
-    const horizontal = Math.cos(view.actualPitch) * radius;
-    cameraOffset.set(Math.sin(view.actualYaw) * horizontal, Math.sin(view.actualPitch) * radius, Math.cos(view.actualYaw) * horizontal);
-    camera.position.copy(look).add(cameraOffset);
-    const halfHeight = Math.max(profile.height, profile.width / aspect) / (view.actualZoom * 2);
-    const halfWidth = halfHeight * aspect;
-    const shift = !mobile && mode !== 'building' ? halfWidth * 0.055 : 0;
-    camera.left = -halfWidth - shift;
-    camera.right = halfWidth - shift;
-    camera.top = halfHeight;
-    camera.bottom = -halfHeight;
-    camera.lookAt(look);
-    camera.updateProjectionMatrix();
-    camera.updateMatrixWorld();
+    updateStatus();
   }
 
-  function updatePins() {
-    const { visibleValue } = states.get(mode);
-    const occupied = [];
-    for (const { hotspot, button } of activePins) {
-      if (following || (hotspot.minimumDepth ?? 0) > visibleValue) {
-        button.hidden = true;
-        continue;
-      }
-      projected.copy(hotspot.position).project(camera);
-      const offscreen = Math.abs(projected.x) > 0.94 || Math.abs(projected.y) > 0.94 || Math.abs(projected.z) > 1;
-      button.hidden = offscreen;
-      if (offscreen) continue;
-      const x = (projected.x + 1) * width / 2;
-      let y = (1 - projected.y) * height / 2;
-      const labelWidth = button.offsetWidth;
-      const left = clamp(x, labelWidth / 2 + 5, width - labelWidth / 2 - 5);
-      for (const pin of occupied) {
-        if (Math.abs(pin.x - left) < (pin.width + labelWidth) / 2 + 5 && Math.abs(pin.y - y) < 33) y = pin.y - 33;
-      }
-      occupied.push({ x: left, y, width: labelWidth });
-      button.style.transform = 'translate3d(' + left + 'px,' + Math.max(41, y) + 'px,0) translate(-50%, calc(-100% - 6px))';
-    }
-  }
-
-  const pointers = new Map();
+  const fingers = new Map();
   function orbit(dx, dy) {
-    if (following) setFollowing(false);
-    view.yaw = clamp(view.yaw - dx * 0.009, -1.04, 1.20);
-    view.pitch = clamp(view.pitch + dy * 0.006, 0.10, 0.88);
+    stopCameraFlight();
+    desired.yaw = clamp(desired.yaw - dx * 0.0075, -1.08, 1.39);
+    desired.pitch = clamp(desired.pitch + dy * 0.0049, 0.21, 0.95);
   }
-  function zoomBy(multiplier) {
-    if (following) setFollowing(false);
-    view.zoom = clamp(view.zoom * multiplier, 0.68, 2.5);
+  function zoom(factor) {
+    stopCameraFlight();
+    desired.span = clamp(desired.span * factor, 18, 425);
   }
   canvas.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
     canvas.setPointerCapture(event.pointerId);
-    pointers.set(event.pointerId, [event.clientX, event.clientY]);
+    fingers.set(event.pointerId, [event.clientX, event.clientY]);
   });
   canvas.addEventListener('pointermove', event => {
-    const previous = pointers.get(event.pointerId);
-    if (!previous) return;
-    const next = [event.clientX, event.clientY];
-    if (pointers.size === 2) {
-      const other = [...pointers].find(([id]) => id !== event.pointerId)[1];
-      const before = Math.hypot(previous[0] - other[0], previous[1] - other[1]);
-      const after = Math.hypot(next[0] - other[0], next[1] - other[1]);
-      if (before > 3 && after > 3) zoomBy(after / before);
-    } else if (pointers.size === 1) {
-      orbit(next[0] - previous[0], next[1] - previous[1]);
+    const prior = fingers.get(event.pointerId);
+    if (!prior) return;
+    const point = [event.clientX, event.clientY];
+    if (fingers.size === 2) {
+      const other = [...fingers].find(([id]) => id !== event.pointerId)[1];
+      const old = Math.hypot(prior[0] - other[0], prior[1] - other[1]);
+      const next = Math.hypot(point[0] - other[0], point[1] - other[1]);
+      if (old > 4 && next > 4) zoom(old / next);
+    } else if (fingers.size === 1) {
+      orbit(point[0] - prior[0], point[1] - prior[1]);
     }
-    pointers.set(event.pointerId, next);
+    fingers.set(event.pointerId, point);
   });
   for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
-    canvas.addEventListener(type, event => pointers.delete(event.pointerId));
+    canvas.addEventListener(type, event => fingers.delete(event.pointerId));
   }
   canvas.addEventListener('wheel', event => {
     event.preventDefault();
-    zoomBy(Math.exp(-clamp(event.deltaY, -160, 160) * 0.0017));
+    zoom(Math.exp(clamp(event.deltaY, -170, 170) * 0.0016));
   }, { passive: false });
   canvas.tabIndex = 0;
-  canvas.setAttribute('aria-label', '三维模型。方向键旋转，加减键缩放，Home 键重置。');
+  canvas.setAttribute('aria-label', '三维城市。方向键旋转，加减键缩放，Home 键重置。');
   canvas.addEventListener('keydown', event => {
     const actions = {
-      ArrowLeft: () => orbit(-11, 0), ArrowRight: () => orbit(11, 0),
-      ArrowUp: () => orbit(0, 11), ArrowDown: () => orbit(0, -11),
-      '+': () => zoomBy(1.16), '=': () => zoomBy(1.16), '-': () => zoomBy(0.86), Home: resetView,
+      ArrowLeft: () => orbit(-12, 0), ArrowRight: () => orbit(12, 0),
+      ArrowUp: () => orbit(0, 12), ArrowDown: () => orbit(0, -12),
+      '+': () => zoom(0.86), '=': () => zoom(0.86), '-': () => zoom(1.15), Home: resetView,
     };
     if (!Object.hasOwn(actions, event.key)) return;
     event.preventDefault();
     actions[event.key]();
   });
 
-  for (const button of routeButtons) button.addEventListener('click', () => navigate(button.dataset.route));
-  window.addEventListener('hashchange', () => setMode(readRoute()));
-  elements['building-cta'].addEventListener('click', () => navigate('building'));
-  elements.depth.addEventListener('input', () => updateRange(Number(elements.depth.value)));
-  elements.follow.addEventListener('click', () => setFollowing(!following));
-  elements['reset-view'].addEventListener('click', resetView);
-  elements.rain.addEventListener('click', () => setRain(!raining));
-  elements.garden.addEventListener('click', () => {
+  for (const node of nav) node.addEventListener('click', () => navigate(node.dataset.route));
+  function onHistoryChange() { stopTour(); setMode(routeFromHash()); }
+  window.addEventListener('popstate', onHistoryChange);
+  window.addEventListener('hashchange', onHistoryChange);
+  ui['cut-cta'].addEventListener('click', () => {
+    stopTour();
+    if (mode === 'river') setDepth(depth ? 0 : maximumDepth);
+    else navigate('river');
+  });
+  ui.tour.addEventListener('click', () => {
+    if (tour) return stopTour();
+    tour = { index: 0, wait: 0 };
+    ui.tour.textContent = '结束巡游';
+    ui.tour.setAttribute('aria-pressed', 'true');
+    navigate(tourStops[0], true);
+    updateStatus();
+  });
+  ui.night.addEventListener('click', () => {
+    night = !night;
+    ui.app.dataset.night = String(night);
+    ui.night.textContent = night ? '日景' : '夜景';
+    ui.night.setAttribute('aria-pressed', night);
+    city.setNight?.(night);
+    terrain.setNight?.(night);
+  });
+  ui['reset-view'].addEventListener('click', resetView);
+  ui.fullscreen.hidden = !ui.app.requestFullscreen;
+  ui.fullscreen.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await ui.app.requestFullscreen();
+    } catch {
+      ui.fullscreen.hidden = true;
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    const label = document.fullscreenElement ? '退出全屏' : '全屏';
+    ui.fullscreen.setAttribute('aria-label', label);
+    ui.fullscreen.title = label;
+  });
+  ui.depth.addEventListener('input', () => {
+    stopTour();
+    if (mode === 'building') setExpansion(Number(ui.depth.value));
+    else setDepth(Number(ui.depth.value));
+  });
+  ui.follow.addEventListener('click', () => setFollowing(!following));
+  ui.experiment.addEventListener('click', () => {
+    stopTour();
+    activeExperiments.set(mode, !activeExperiments.get(mode));
+    refreshExperiment();
+  });
+  ui.garden.addEventListener('click', () => {
     garden = !garden;
-    activeWorld.motion.setGarden(garden);
-    elements.garden.setAttribute('aria-pressed', garden);
+    experiment.setGarden(garden);
+    ui.garden.setAttribute('aria-pressed', garden);
   });
-  elements.replay.addEventListener('click', () => activeWorld.motion.replay());
-  elements.story.addEventListener('click', () => {
-    const state = states.get(mode);
-    state.story = !state.story;
-    activeWorld.model.setStory(state.story);
-    if (state.story) {
-      resetView();
-      const storySpot = { river: 'bank', hill: 'steps', rural: 'canal' }[mode];
-      selectFeature(storySpot, false);
-    } else {
-      updateGuide();
-    }
-    updateStateBadge();
-  });
+  ui.replay.addEventListener('click', () => experiment.restart());
 
-  function frame(now) {
-    renderFrame = requestAnimationFrame(frame);
-    const dt = last ? Math.min(0.067, (now - last) / 1000) : 1 / 60;
-    last = now;
-    if (!showing) return;
-    if (!reducedMotion.matches || following || states.get(mode).story) elapsed += dt;
-    const state = states.get(mode);
-    const eased = damp(state.visibleValue, state.value, 6.2, dt);
-    state.visibleValue = reducedMotion.matches || Math.abs(eased - state.value) < 0.025 ? state.value : eased;
-    const { model, motion } = activeWorld;
-    if (mode === 'building') {
-      model.update(dt, elapsed, state.visibleValue / 100, state.visibleValue > 3 ? state.selected : null);
-    } else if (mode === 'atlas') {
-      model.update(dt, elapsed);
-    } else {
-      if (activeWorld.appliedDepth !== state.visibleValue) {
-        model.setDepth(state.visibleValue);
-        activeWorld.appliedDepth = state.visibleValue;
-      }
-      model.update?.(dt, elapsed, state.visibleValue);
-      motion?.update(dt, elapsed, state.visibleValue);
-      if (mode === 'plain') updateRainFeedback();
-    }
-    updateCamera(dt);
-    updatePins();
-    renderer.render(scene, camera);
-    if (!rendered) {
-      elements.loading.hidden = true;
-      rendered = true;
-    }
+  function resize() {
+    width = Math.max(1, ui.viewport.clientWidth);
+    height = Math.max(1, ui.viewport.clientHeight);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    for (const pin of pins) pin.labelWidth = 0;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, width < 650 ? 1.25 : 1.55));
+    renderer.setSize(width, height, false);
   }
 
-  resize();
-  new ResizeObserver(resize).observe(elements.viewport);
-  new IntersectionObserver(([entry]) => { showing = entry.isIntersecting; }).observe(elements.viewport);
+  function frame(now) {
+    if (!rendering) return;
+    renderFrame = requestAnimationFrame(frame);
+    const dt = last ? Math.min((now - last) / 1000, 0.065) : 1 / 60;
+    last = now;
+    if (!showing) return;
+    if (!reduceMotion.matches || following || activeExperiments.get(mode)) time += dt;
+    const expandTo = mode === 'building' ? expansion / 100 : 0;
+    const depthTo = mode === 'river' && (!flight || flight.time > flight.duration * 0.35) ? depth : 0;
+    const easedCut = damp(cut, depthTo, 3.25, dt);
+    const easedOpen = damp(opened, expandTo, 4, dt);
+    const newCut = reduceMotion.matches || Math.abs(easedCut - depthTo) < 0.035 ? depthTo : easedCut;
+    const newOpen = reduceMotion.matches || Math.abs(easedOpen - expandTo) < 0.002 ? expandTo : easedOpen;
+    if (newCut !== cut) terrain.setDepth(newCut);
+    if (mode === 'building' || newOpen !== opened) {
+      property.position.y = propertyGround + newOpen * 4.3;
+      building.update(dt, time, newOpen, mode === 'building' && newOpen > 0.1 ? selected : null);
+    }
+    cut = newCut;
+    opened = newOpen;
+    nightLevel = reduceMotion.matches ? Number(night) : damp(nightLevel, Number(night), 3, dt);
+    ambient.color.copy(daySky).lerp(nightSky, nightLevel);
+    ambient.intensity = lerp(2.1, 0.95, nightLevel);
+    sun.intensity = lerp(2.65, 0.20, nightLevel);
+    fill.intensity = lerp(1.35, 0.83, nightLevel);
+    scene.fog.color.copy(dayFog).lerp(nightFog, nightLevel);
+    city.update(dt, time);
+    terrain.update(dt, time);
+    infrastructure.update(dt, time, cut);
+    experiment.update(dt, time);
+    if (mode === 'plain') ui['rain-progress'].value = experiment.progress();
+    updateCamera(dt);
+    renderPins();
+    renderer.render(scene, camera);
+    ui.loading.hidden = true;
+    updateTour(dt);
+  }
+
+  new ResizeObserver(resize).observe(ui.viewport);
+  new IntersectionObserver(([entry]) => { showing = entry.isIntersecting; }).observe(ui.viewport);
   document.addEventListener('visibilitychange', () => { last = 0; });
   canvas.addEventListener('webglcontextlost', event => {
     event.preventDefault();
+    rendering = false;
     cancelAnimationFrame(renderFrame);
-    elements.loading.textContent = '3D 画面已暂停。刷新页面可以重新打开。';
-    elements.loading.hidden = false;
+    ui.loading.hidden = false;
+    ui.loading.textContent = '3D 画面已暂停，刷新页面可以重新打开。';
   });
-  setMode(readRoute());
+  resize();
+  setMode(routeFromHash(), true);
   renderFrame = requestAnimationFrame(frame);
 }
 
@@ -494,5 +602,5 @@ try {
   start();
 } catch (error) {
   console.error(error);
-  elements.loading.textContent = '未能打开 3D 场景。请尝试启用浏览器硬件加速后刷新。';
+  ui.loading.textContent = '未能打开 3D 城市。请尝试启用浏览器硬件加速，再刷新页面。';
 }
