@@ -354,7 +354,7 @@ async function mount(kind, note = '') {
       },
     };
     if (kind === '3d') {
-      const { createCoast3D } = await import('./coast-3d.js');
+      const { createCoast3D } = await import('./coast-3d.js?v=20261120.5.1');
       if (edition !== pendingVersion) { layer.remove(); return; }
       adapter = createCoast3D(layer, options);
     } else {

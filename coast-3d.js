@@ -212,7 +212,7 @@ export function createCoast3D(container, options) {
       current.yaw = lerp(current.yaw, desired.yaw, phase);
       current.pitch = lerp(current.pitch, desired.pitch, phase);
     }
-    const extent = Math.max(current.span / camera.aspect, current.span * (mode === 'atlas' ? 0.49 : 0.55));
+    const extent = Math.max(current.span / camera.aspect, current.span * 0.51);
     const distance = extent / (2 * Math.tan(degToRad(camera.fov / 2)));
     const horizon = Math.cos(current.pitch) * distance;
     groundOffset.set(Math.sin(current.yaw) * horizon, Math.sin(current.pitch) * distance, Math.cos(current.yaw) * horizon);
