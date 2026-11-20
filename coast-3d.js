@@ -8,7 +8,10 @@ import { createCoastExpansion } from './coast-expansion.js';
 import { createCoastDiscover } from './coast-discover.js?v=20261120.6';
 import { createCoastLandforms } from './coast-landforms.js';
 import { createCoastWaterworks } from './coast-waterworks.js';
-import { destinations, underground, buildingParts } from './coast-guide.js?v=20261120.6';
+import { destinations, underground, buildingParts } from './coast-guide.js?v=20261120.7';
+import { createGeoGround } from './geo-ground.js';
+import { createGeoAssets } from './geo-assets.js';
+import { GEO, geoSites } from './geo-data.js';
 
 const { clamp, damp, lerp, degToRad } = THREE.MathUtils;
 
@@ -43,7 +46,7 @@ function connectRenderer() {
 }
 
 export function createCoast3D(container, options) {
-  const { onNavigate, onFeature, onInteract, onError, onStatus } = options;
+  const { onNavigate, onFeature, onGeoSite, onGeoFilter, onInteract, onError, onStatus } = options;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const { renderer, canvas } = connectRenderer();
   renderer.setClearColor(0, 0);
@@ -72,7 +75,7 @@ export function createCoast3D(container, options) {
   fill.position.set(98, 53, -94);
   scene.add(ambient, sun, fill);
 
-  let terrain, city, infrastructure, experiment, expansionWorld, discover, building, landforms, waterworks;
+  let terrain, city, infrastructure, experiment, expansionWorld, discover, building, landforms, waterworks, geoGround, geoAssets;
   const property = new THREE.Group();
   const propertyGround = groundY(-34, -27);
   property.position.set(-34, propertyGround, -27);
@@ -85,6 +88,10 @@ export function createCoast3D(container, options) {
     expansionWorld = createCoastExpansion(scene);
     landforms = createCoastLandforms(scene);
     waterworks = createCoastWaterworks(scene);
+    geoGround = createGeoGround(scene);
+    geoAssets = createGeoAssets(scene);
+    geoGround.setVisible(false);
+    geoAssets.setVisible(false);
     discover = createCoastDiscover(scene);
     building = createBuilding(property);
     building.update(0, 0, 0, null);
@@ -101,7 +108,10 @@ export function createCoast3D(container, options) {
   const labels = document.createElement('div');
   labels.className = 'pins';
   labels.setAttribute('aria-label', '三维地图定位点');
-  container.append(canvas, labels);
+  const ruler = document.createElement('div');
+  ruler.className = 'pins';
+  ruler.setAttribute('aria-hidden', 'true');
+  container.append(canvas, labels, ruler);
   const placePoints = [
     ['hill', new THREE.Vector3(-93, groundY(-93, -37) + 6.5, -37)],
     ['rural', new THREE.Vector3(-83, groundY(-83, 43) + 4.1, 43)],
@@ -161,10 +171,33 @@ export function createCoast3D(container, options) {
   let aerial = false;
   let surfaceExperiment = false;
   let viewStatus = '';
+  let geo = { site: null, depth: GEO.limit, filter: 'all' };
+  let geoShown = 0;
+  let geoTicks = [];
 
   function pose(id) {
     const profile = destinations[id];
     const focus = new THREE.Vector3(...profile.focus);
+    if (id === 'geo') {
+      const site = geoSites.find(place => place.id === geo.site);
+      if (!site) return {
+        focus: new THREE.Vector3(width < 650 ? -15 : 10, -17, 101),
+        span: width < 650 ? 395 : 760, yaw: 0.075, pitch: 0.225,
+      };
+      if (geo.filter === 'pipes') {
+        const trench = geoAssets.markers[site.id].trench;
+        return {
+          focus: trench ? trench.clone() : new THREE.Vector3(site.x, -3.7, GEO.front + 5),
+          span: trench ? 69 : 84, yaw: -0.18, pitch: 0.32,
+        };
+      }
+      const context = geo.filter === 'foundation';
+      return {
+        focus: new THREE.Vector3(site.x + 2.5, context ? -site.foundation.depth * GEO.exaggeration * 0.49 : -37, GEO.front - 8),
+        span: context ? Math.max(108, site.foundation.depth * 2.95 + 39) : 171,
+        yaw: 0.115, pitch: context ? 0.16 : 0.22,
+      };
+    }
     if (id === 'atlas') {
       focus.set(-3, 12, -9);
       return { focus, span: 684, yaw: 0.29, pitch: 0.54 };
@@ -250,9 +283,44 @@ export function createCoast3D(container, options) {
   }
 
   function preparePins() {
-    const next = placePoints
+    const next = mode === 'geo' ? [] : placePoints
       .filter(([id]) => id !== mode && (id !== 'building' || mode === 'plain' || mode === 'lake'))
       .map(([id, point]) => ({ id, point, label: destinations[id].label, color: destinations[id].accent }));
+    if (mode === 'geo') {
+      const site = geoSites.find(place => place.id === geo.site);
+      if (!site) {
+        for (const item of geoSites) next.push({
+          id: item.id, point: new THREE.Vector3(item.x, -9, GEO.front + 1.5),
+          label: item.label, color: '#f3cc96', action: () => onGeoSite(item.id),
+        });
+      } else {
+        const markers = geoAssets.markers[site.id];
+        if (geo.filter === 'all' || geo.filter === 'foundation') {
+          next.push({
+            id: 'foundation', point: markers.foundation,
+            label: site.foundation.label + ' ' + site.foundation.depth + ' m',
+            color: '#e2d3b7', minimumGeo: site.foundation.depth, action: () => onGeoFilter('foundation'),
+          });
+        }
+        if (geo.filter === 'all' || geo.filter === 'pipes') {
+          next.push(
+            { id: 'supply', point: markers.supply, label: '给水 ' + site.pipes.supply + ' m', color: '#61dcf8', minimumGeo: site.pipes.supply, action: () => onGeoFilter('pipes') },
+            { id: 'sewer', point: markers.sewer, label: '排水 ' + site.pipes.sewer + ' m', color: '#f0ae67', minimumGeo: site.pipes.sewer, action: () => onGeoFilter('pipes') },
+          );
+          if (geo.filter === 'pipes' && markers.trench) next.push(
+            { id: 'bedding', point: markers.bedding, label: '颗粒垫层', color: '#e2b77a', minimumGeo: 2.0, action: () => onGeoFilter('pipes') },
+            { id: 'backfill', point: markers.backfill, label: '回填层', color: '#ffce91', minimumGeo: 1.0, action: () => onGeoFilter('pipes') },
+            { id: 'manhole', point: markers.manhole, label: '阀井', color: '#aadbf0', minimumGeo: 0.5, action: () => onGeoFilter('pipes') },
+          );
+        }
+        if (geo.filter === 'all' || geo.filter === 'earth') {
+          next.push({
+            id: 'water', point: new THREE.Vector3(site.x + 26, -site.water * GEO.exaggeration, GEO.front + 1),
+            label: '水位 ' + site.water + ' m', color: '#78b6ff', minimumGeo: site.water, action: () => onGeoFilter('earth'),
+          });
+        }
+      }
+    }
     if (mode === 'river') {
       for (const [id, point] of Object.entries(infrastructure.features)) {
         const item = underground[id];
@@ -271,17 +339,26 @@ export function createCoast3D(container, options) {
       node.textContent = pin.label;
       node.hidden = true;
       if (pin.color) node.style.setProperty('--pin-color', pin.color);
-      node.addEventListener('click', () => pin.part ? onFeature(pin.id) : onNavigate(pin.id));
+      node.addEventListener('click', pin.action || (() => pin.part ? onFeature(pin.id) : onNavigate(pin.id)));
       return { ...pin, node, labelWidth: 0 };
     });
     labels.replaceChildren(...pins.map(pin => pin.node));
+    const tickDepths = mode !== 'geo' ? [] : geo.filter === 'pipes' ? [0, 1, 2, 3, 4, 6, 8, 10] : [0, 10, 20, 30, 40, 50, 62];
+    geoTicks = tickDepths.map(depth => {
+      const node = document.createElement('span');
+      node.className = 'geo-depth-tick';
+      node.textContent = depth ? depth + ' m' : '地表';
+      return { depth, node };
+    });
+    ruler.replaceChildren(...geoTicks.map(tick => tick.node));
   }
 
   function renderPins() {
     const placed = [];
     for (const pin of pins) {
       if (following || activeCase || ((mode === 'river' || mode === 'building') && !pin.part)
-          || (pin.minimum ?? 0) > cut || (pin.local && opened < 0.2 && pin.id !== 'roof')) {
+          || (pin.minimum ?? 0) > cut || (pin.minimumGeo ?? 0) > geoShown
+          || (pin.local && opened < 0.2 && pin.id !== 'roof')) {
         pin.node.hidden = true;
         continue;
       }
@@ -300,6 +377,20 @@ export function createCoast3D(container, options) {
       y = clamp(y, 43, height - (width < 650 ? 51 : 62));
       placed.push({ x, y, width: labelWidth });
       pin.node.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0) translate(-50%,calc(-100% - 7px))';
+    }
+  }
+
+  function moveRuler() {
+    if (mode !== 'geo') return;
+    const site = geoSites.find(place => place.id === geo.site);
+    const chapter = site ? pose('geo') : null;
+    const side = site ? (geo.filter === 'pipes' ? chapter.focus.x - chapter.span * 0.39 : site.min - 3)
+      : width < 650 ? -146 : -330;
+    for (const { depth, node } of geoTicks) {
+      projected.set(side, -GEO.exaggeration * depth, GEO.front + 2.1).project(camera);
+      node.hidden = (depth > geoShown + 0.1 || Math.abs(projected.x) > 0.99 || Math.abs(projected.y) > 0.95 || Math.abs(projected.z) > 1);
+      if (!node.hidden) node.style.transform = 'translate3d(' + ((projected.x + 1) * width / 2) + 'px,'
+        + ((1 - projected.y) * height / 2) + 'px,0)';
     }
   }
 
@@ -336,6 +427,10 @@ export function createCoast3D(container, options) {
     try {
       if (!reduced.matches || following || activeCase || surfaceExperiment) elapsed += dt;
       const cutTarget = mode === 'river' && (!flight || flight.time > flight.duration * 0.26) ? depth : 0;
+      const geologyTarget = mode === 'geo' ? geo.depth : 0;
+      const easedGeo = reduced.matches ? geologyTarget : damp(geoShown, geologyTarget, 4.6, dt);
+      const nextGeo = Math.abs(easedGeo - geologyTarget) > 0.028 ? easedGeo : geologyTarget;
+      if (nextGeo !== geoShown) showGeology(nextGeo);
       const openTarget = mode === 'building' ? expansion / 100 : 0;
       const nextCut = reduced.matches ? cutTarget : damp(cut, cutTarget, 3.8, dt);
       const nextOpen = reduced.matches ? openTarget : damp(opened, openTarget, 4.5, dt);
@@ -361,6 +456,10 @@ export function createCoast3D(container, options) {
       expansionWorld.update(dt, elapsed);
       landforms.update(dt, elapsed);
       waterworks.update(dt, elapsed);
+      if (geoShown > 0.01) {
+        geoGround.update(dt, elapsed);
+        geoAssets.update(dt, elapsed);
+      }
       infrastructure.update(dt, elapsed, cut);
       experiment.update(dt, elapsed);
       discover.setBuilding(opened);
@@ -368,6 +467,7 @@ export function createCoast3D(container, options) {
       frameProgress = experiment.progress();
       updateCamera(dt);
       renderPins();
+      moveRuler();
       renderer.render(scene, camera);
       if (shaderError) renderFailure(viewError('shader-init'));
     } catch (error) {
@@ -403,6 +503,14 @@ export function createCoast3D(container, options) {
     following = false;
     aerial = false;
     fly(pose(mode));
+  }
+
+  function showGeology(value) {
+    geoShown = value;
+    geoGround.setVisible(value > 0.01);
+    geoAssets.setVisible(value > 0.01);
+    geoGround.setDepth(value);
+    geoAssets.setDepth(value);
   }
 
   const pointers = new Map();
@@ -467,6 +575,16 @@ export function createCoast3D(container, options) {
       preparePins();
     },
     setDepth(value) { depth = value; },
+    setGeo(state, move = true, immediate = false) {
+      const changed = geo.site !== state.site || geo.filter !== state.filter;
+      geo = state;
+      geoAssets.setFilter(state.filter);
+      if (immediate && mode === 'geo') showGeology(state.depth);
+      if (mode === 'geo' && (move || changed)) {
+        preparePins();
+        if (move) fly(pose('geo'), immediate);
+      }
+    },
     setExpansion(value) { expansion = value; },
     setNight(value) {
       night = value;
@@ -564,6 +682,7 @@ export function createCoast3D(container, options) {
       renderer.forceContextLoss();
       canvas.remove();
       labels.remove();
+      ruler.remove();
     },
   };
 }

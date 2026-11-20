@@ -1,6 +1,7 @@
-import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.6';
-import { cases } from './coast-cases.js?v=20261120.6';
+import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.7';
+import { cases } from './coast-cases.js?v=20261120.7';
 import { createPumpRun, pumpDefaults } from './pump-model.js';
+import { GEO, geoSites, geoFilters, geoSources } from './geo-data.js';
 
 const ui = Object.fromEntries([
   'app', 'viewport', 'loading', 'places', 'scene-title', 'scene-intro', 'night', 'sunset', 'reset-view', 'fullscreen',
@@ -11,6 +12,7 @@ const ui = Object.fromEntries([
   'case-source', 'share', 'share-result', 'share-field', 'share-location', 'study-steps',
   'pump-meter', 'pump-water', 'pump-height', 'pump-indicators', 'pump-storm', 'pump-primary', 'pump-auto',
   'pump-lab', 'pump-inflow', 'pump-inflow-value', 'pump-stages', 'pump-reset',
+  'geo-home', 'geo-key', 'geo-toolbar', 'geo-sites', 'geo-filters', 'geo-measures', 'geo-layers', 'geo-model-note',
 ].map(id => [id, document.getElementById(id)]));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const maximumDepth = 30;
@@ -19,6 +21,9 @@ const choices = [...ui['case-buttons'].querySelectorAll('[data-case]')];
 const activeExperiments = new Map();
 const pumpSettings = { ...pumpDefaults };
 const pumpRun = createPumpRun();
+const ground = { site: null, depth: GEO.limit, filter: 'all' };
+const sitesById = new Map(geoSites.map(site => [site.id, site]));
+const groundFilters = new Set(geoFilters.map(([id]) => id));
 const pumpParts = {
   inlet: { label: '进水沟', title: '水是怎么找到集水井的？', intro: '沟道利用高差，把坡道和路面的来水引到低处。进水变大时，井里开始存水。' },
   well: { label: '集水井', title: '泵启动之前，水先存在哪？', intro: '集水井提供一段蓄水空间。水位传感器可以触发泵的控制。这个模型里，备用泵在高水位接管。' },
@@ -82,14 +87,19 @@ function inputValue(input, output, value, suffix, ariaText) {
 }
 
 function refreshRange() {
-  ui.depth.max = mode === 'building' ? 100 : maximumDepth;
-  if (mode === 'building') inputValue(ui.depth, ui['range-value'], expansion, '%', '展开 ' + expansion + '%');
+  ui.depth.max = mode === 'geo' ? GEO.limit : mode === 'building' ? 100 : maximumDepth;
+  if (mode === 'geo') inputValue(ui.depth, ui['range-value'], ground.depth, ' m', '向下显露 ' + ground.depth + ' 米');
+  else if (mode === 'building') inputValue(ui.depth, ui['range-value'], expansion, '%', '展开 ' + expansion + '%');
   else inputValue(ui.depth, ui['range-value'], depth, ' m', depth ? '地下 ' + depth + ' 米' : '江面');
   ui['cut-cta'].textContent = mode === 'river' && depth ? '合上剖面' : '切开江底';
 }
 
 function renderGuide() {
   const profile = destinations[mode];
+  if (mode === 'geo') {
+    renderGroundGuide();
+    return;
+  }
   const discovery = cases[caseId];
   const pumpDetail = caseId === 'pump' ? pumpParts[pumpStage] : undefined;
   const item = detailSet()[selected];
@@ -141,12 +151,18 @@ function renderControls() {
   ui.app.dataset.mode = mode;
   ui['scene-title'].textContent = profile.title;
   ui['scene-intro'].textContent = profile.intro;
-  const usesSlider = mode === 'river' || mode === 'building';
+  const geology = mode === 'geo';
+  const usesSlider = geology || mode === 'river' || mode === 'building';
   ui['slider-panel'].hidden = !usesSlider;
   ui.controls.hidden = !usesSlider && !experiments[mode];
   ui.follow.hidden = mode !== 'river';
-  ui['range-label'].textContent = mode === 'building' ? '建筑展开度' : '剖面深度';
-  const marks = mode === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['江面', '10 m', '20 m', '30 m'];
+  ui['geo-toolbar'].hidden = ui['geo-key'].hidden = ui['geo-model-note'].hidden = !geology;
+  ui['geo-measures'].hidden = ui['geo-layers'].hidden = !geology;
+  ui['geo-home'].hidden = !geology;
+  updateZoomButtons();
+  ui['range-label'].textContent = geology ? '显露深度' : mode === 'building' ? '建筑展开度' : '剖面深度';
+  const marks = geology ? ['地表', '约 15 m', '约 31 m', '约 47 m', '62 m'] :
+    mode === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['江面', '10 m', '20 m', '30 m'];
   ui.scale.replaceChildren(...marks.map(label => {
     const mark = document.createElement('span');
     mark.textContent = label;
@@ -168,6 +184,75 @@ function renderControls() {
   refreshRange();
   refreshExperiment();
   renderCase();
+}
+
+const siteButtons = geoSites.map(site => [site.id, makeButton(site.label, () => selectGround(site.id))]);
+const filterButtons = geoFilters.map(([id, label]) => [id, makeButton(label, () => selectFilter(id))]);
+ui['geo-sites'].replaceChildren(...siteButtons.map(([, node]) => node));
+ui['geo-filters'].replaceChildren(...filterButtons.map(([, node]) => node));
+
+function renderGroundGuide() {
+  const site = sitesById.get(ground.site);
+  const entry = destinations.geo;
+  ui['scene-title'].textContent = site?.label || entry.title;
+  ui['scene-intro'].textContent = site ? site.question : entry.intro;
+  ui['guide-heading'].textContent = site?.question || entry.question;
+  ui['guide-copy'].textContent = site?.explanation
+    || '沿线有六种地段。浅基础、深桩、浅埋给水和较低处的重力排水，在同一把深度尺上可以直接比较。';
+  const measurements = site ? [
+    [site.foundation.label, site.foundation.depth], ['给水管中心', site.pipes.supply],
+    ['排水管中心', site.pipes.sewer], ['地下水位', site.water],
+  ] : [['山脚浅基础', 2.6], ['港区码头桩', 48]];
+  ui['geo-measures'].replaceChildren(...measurements.map(([label, value]) => {
+    const measurement = document.createElement('div');
+    const title = document.createElement('span');
+    const depth = document.createElement('strong');
+    title.textContent = label;
+    depth.textContent = value + ' m';
+    measurement.append(title, depth);
+    return measurement;
+  }));
+  let top = 0;
+  ui['geo-layers'].hidden = !site || ground.filter === 'pipes' || ground.filter === 'foundation';
+  ui['geo-layers'].replaceChildren(...(site?.layers || []).map(layer => {
+    const node = document.createElement('li');
+    node.style.setProperty('--rock', layer.color);
+    node.textContent = layer.label + ' · ' + top + '–' + layer.bottom + ' m';
+    top = layer.bottom;
+    return node;
+  }));
+  const source = geoSources[ground.filter] || geoSources.earth;
+  ui['case-source'].hidden = false;
+  [ui['case-source'].textContent, ui['case-source'].href] = source;
+  ui['geo-home'].textContent = ground.site || ground.filter !== 'all' ? '回到全线' : '看地表总览';
+  for (const [id, node] of siteButtons) node.setAttribute('aria-pressed', id === ground.site);
+  for (const [id, node] of filterButtons) node.setAttribute('aria-pressed', id === ground.filter);
+}
+
+function changeGround(move = true) {
+  throughView('setGeo', { ...ground }, move);
+  refreshRange();
+  renderGroundGuide();
+  writeLocation(true);
+}
+
+function selectGround(id) {
+  if (!sitesById.has(id)) return;
+  stopTour();
+  if (mode !== 'geo') enter('geo');
+  ground.site = id;
+  if (ground.depth < 8) ground.depth = GEO.limit;
+  changeGround();
+}
+
+function selectFilter(id) {
+  if (mode !== 'geo' || !groundFilters.has(id)) return;
+  ground.filter = id;
+  if (id === 'pipes' && !ground.site) ground.site = 'oldcity';
+  if (id === 'foundation' && !ground.site) ground.site = 'harborfill';
+  if (id === 'pipes') ground.depth = Math.max(ground.depth, 7);
+  if (id === 'foundation') ground.depth = Math.max(ground.depth, Math.ceil(sitesById.get(ground.site).foundation.depth));
+  changeGround();
 }
 
 const pumpStageButtons = Object.entries(pumpParts).map(([id, item]) => {
@@ -210,6 +295,11 @@ function pumpFrame(dt) {
 function resetAngle() {
   ui.angle.setAttribute('aria-pressed', 'false');
   ui.angle.textContent = '俯瞰';
+}
+
+function updateZoomButtons() {
+  const usable = typeof activeView?.adapter.zoom === 'function' && !(mode === 'geo' && activeView.kind === 'map');
+  ui['zoom-in'].hidden = ui['zoom-out'].hidden = !usable;
 }
 
 function refreshExperiment() {
@@ -281,8 +371,11 @@ function parseLocation() {
   const rawInflow = url.searchParams.get('inflow');
   const inflow = rawInflow === null ? pumpDefaults.inflow : Number(rawInflow);
   const stage = url.searchParams.get('pump');
+  const requestedSite = url.searchParams.get('site');
+  const requestedFilter = url.searchParams.get('layer');
+  const rawGround = url.searchParams.get('ground');
   return {
-    mode: discovery?.mode || (Object.hasOwn(destinations, request) ? request : 'atlas'),
+    mode: discovery?.mode || (Object.hasOwn(destinations, request) ? request : 'geo'),
     caseId: discovery ? found : undefined,
     level: Number.isFinite(numeric) ? clamp(numeric, 0, 100) : discovery?.initial,
     format: url.searchParams.get('view') === 'map' ? 'map' : undefined,
@@ -292,6 +385,11 @@ function parseLocation() {
       automatic: url.searchParams.get('backup') !== 'off',
     },
     stage: Object.hasOwn(pumpParts, stage) ? stage : null,
+    ground: {
+      site: sitesById.has(requestedSite) ? requestedSite : null,
+      filter: groundFilters.has(requestedFilter) ? requestedFilter : 'all',
+      depth: rawGround !== null && Number.isFinite(Number(rawGround)) ? clamp(Number(rawGround), 0, GEO.limit) : GEO.limit,
+    },
   };
 }
 
@@ -307,6 +405,11 @@ function link() {
     if (!pumpSettings.primary) url.searchParams.set('main', 'off');
     if (!pumpSettings.automatic) url.searchParams.set('backup', 'off');
     if (pumpStage) url.searchParams.set('pump', pumpStage);
+  }
+  if (mode === 'geo') {
+    if (ground.site) url.searchParams.set('site', ground.site);
+    if (ground.filter !== 'all') url.searchParams.set('layer', ground.filter);
+    if (ground.depth !== GEO.limit) url.searchParams.set('ground', String(ground.depth));
   }
   if (pinnedFormat === 'map') url.searchParams.set('view', 'map');
   return url;
@@ -331,6 +434,7 @@ function applyStateToView(adapter, immediate) {
   adapter.setExpansion(expansion);
   adapter.setNight(night);
   adapter.setSunset?.(sunset && !night);
+  if (mode === 'geo') adapter.setGeo?.({ ...ground }, true, immediate);
   adapter.setExperiment(mode, Boolean(activeExperiments.get(mode)));
   adapter.setGarden?.(garden);
   adapter.selectPart?.(selected, false);
@@ -413,7 +517,7 @@ function setFormatUI(kind, reason = '') {
   ui.angle.hidden = typeof activeView?.adapter.toggleAngle !== 'function';
   ui.sunset.hidden = typeof activeView?.adapter.setSunset !== 'function';
   resetAngle();
-  ui['zoom-in'].hidden = ui['zoom-out'].hidden = typeof activeView?.adapter.zoom !== 'function';
+  updateZoomButtons();
   ui['render-note'].hidden = !reason;
   ui['render-note'].textContent = reason;
   refreshExperiment();
@@ -436,6 +540,8 @@ async function mount(kind, note = '') {
     const options = {
       onNavigate: navigate,
       onFeature: selectPart,
+      onGeoSite: selectGround,
+      onGeoFilter: selectFilter,
       onInteract,
       onStatus(text) { if (activeView?.layer === layer) ui['view-status'].textContent = text; },
       onError(error) {
@@ -445,11 +551,11 @@ async function mount(kind, note = '') {
       },
     };
     if (kind === '3d') {
-      const { createCoast3D } = await import('./coast-3d.js?v=20261120.6');
+      const { createCoast3D } = await import('./coast-3d.js?v=20261120.7');
       if (edition !== pendingVersion) { layer.remove(); return; }
       adapter = createCoast3D(layer, options);
     } else {
-      const { createCoastMap } = await import('./coast-map.js?v=20261120.6');
+      const { createCoastMap } = await import('./coast-map.js?v=20261120.7');
       if (edition !== pendingVersion) { layer.remove(); return; }
       adapter = createCoastMap(layer, options);
     }
@@ -510,6 +616,7 @@ function refreshLocation() {
   Object.assign(pumpSettings, pumpDefaults, state.pump);
   pumpStage = state.stage;
   pumpRun.reset();
+  Object.assign(ground, state.ground);
   enter(state.mode, state.caseId, state.level);
   if (state.format !== oldFormat && activeView?.kind !== (state.format || '3d')) mount(state.format || '3d');
 }
@@ -546,8 +653,16 @@ ui['pump-reset'].addEventListener('click', () => {
 ui.depth.addEventListener('input', () => {
   stopTour();
   const value = Number(ui.depth.value);
-  if (mode === 'building') setExpansion(value);
+  if (mode === 'geo') {
+    ground.depth = clamp(value, 0, GEO.limit);
+    changeGround(false);
+  } else if (mode === 'building') setExpansion(value);
   else setDepth(value);
+});
+ui['geo-home'].addEventListener('click', () => {
+  if (!ground.site && ground.filter === 'all') return navigate('atlas');
+  Object.assign(ground, { site: null, depth: GEO.limit, filter: 'all' });
+  changeGround();
 });
 ui['cut-cta'].addEventListener('click', () => {
   stopTour();
@@ -595,7 +710,12 @@ ui['use-3d'].addEventListener('click', () => chooseFormat('3d'));
 ui['use-map'].addEventListener('click', () => chooseFormat('map'));
 ui['zoom-in'].addEventListener('click', () => { onInteract(); throughView('zoom', 0.82); });
 ui['zoom-out'].addEventListener('click', () => { onInteract(); throughView('zoom', 1.22); });
-ui['reset-view'].addEventListener('click', () => { onInteract(); resetAngle(); throughView('resetView'); });
+ui['reset-view'].addEventListener('click', () => {
+  onInteract();
+  resetAngle();
+  if (mode === 'geo' && activeView?.kind === 'map' && ground.site) ui['geo-home'].click();
+  else throughView('resetView');
+});
 ui.angle.addEventListener('click', () => {
   onInteract();
   const aerial = throughView('toggleAngle');
@@ -636,6 +756,7 @@ window.addEventListener('pagehide', event => {
 
 const initial = parseLocation();
 pinnedFormat = initial.format;
+Object.assign(ground, initial.ground);
 Object.assign(pumpSettings, initial.pump);
 pumpStage = initial.stage;
 renderLight();

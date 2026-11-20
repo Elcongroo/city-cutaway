@@ -1,4 +1,12 @@
 export const destinations = {
+  geo: {
+    label: '地底全景',
+    title: '把整座城翻开',
+    intro: '沿一条从山脚到海边的地下剖面，看脚下的给水管、穿过软土的桩和更深处的岩层。',
+    focus: [0, -21, 75], span: 720, yaw: 0.12, pitch: 0.24, accent: '#ffda9a',
+    question: '一座城脚下的土，到处都一样吗？',
+    detail: '点一个地段，近看水管怎么埋、桩往下打多深，再和另一段做对照。剖面沿同一座虚构海湾展开。',
+  },
   atlas: {
     label: '全域总览',
     title: '水从山里来，城市一路长到海边',

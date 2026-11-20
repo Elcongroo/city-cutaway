@@ -1,5 +1,7 @@
-import { buildingParts, destinations, underground } from './coast-guide.js?v=20261120.6';
+import { buildingParts, destinations, underground } from './coast-guide.js?v=20261120.7';
 import { drawPumpStudy, drawWaterStudy } from './coast-map-studies.js';
+import { drawGeoMap } from './geo-map.js';
+import { GEO } from './geo-data.js';
 
 const TAU = Math.PI * 2;
 const WORLD = { left: -336, right: 336, north: -164, south: 139 };
@@ -524,7 +526,7 @@ function drawBuilding(ctx, width, height, expansion, time, discover, addHit) {
   }
 }
 
-export function createCoastMap(container, { onNavigate = () => {}, onFeature = () => {}, onInteract = () => {} } = {}) {
+export function createCoastMap(container, { onNavigate = () => {}, onFeature = () => {}, onGeoSite = () => {}, onInteract = () => {} } = {}) {
   const canvas = document.createElement('canvas');
   canvas.className = 'coast-map';
   canvas.tabIndex = 0;
@@ -542,6 +544,7 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
   let mode = 'atlas', depth = 0, expansion = 0, night = false, following = false, discover = null, selectedPart;
   let width = 1, height = 1, ratio = 1, frameId = 0, shown = true, atlas, lastFrame = 0;
   let garden = false, rainStart = null, renderedTime = 0, pumpTelemetry = null;
+  let geo = { site: null, depth: GEO.limit, filter: 'all' };
   const touches = new Map();
 
   function resetView(immediate = false) {
@@ -583,6 +586,10 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     hits.length = 0;
+    if (mode === 'geo') {
+      hits.push(...drawGeoMap(ctx, width, height, geo).map(hit => ({ ...hit, geological: true })));
+      return;
+    }
     atlas ||= makeAtlas(night);
     const centerY = height * (width < 600 ? 0.56 : 0.54);
     const transform = (x, y) => [width * 0.5 + (x - camera.x) * camera.zoom, centerY + (y - camera.y) * camera.zoom];
@@ -659,7 +666,7 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
     pointer.y = event.clientY;
     const dx = pointer.x - priorX, dy = pointer.y - priorY;
     pointer.traveled += Math.abs(dx) + Math.abs(dy);
-    if (mode === 'river' || mode === 'building') return;
+    if (mode === 'river' || mode === 'building' || mode === 'geo') return;
     if (touches.size === 2) {
       const other = [...touches].find(([id]) => id !== event.pointerId)[1];
       const old = Math.hypot(priorX - other.x, priorY - other.y);
@@ -688,7 +695,8 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
       const h = hits[i];
       if (x >= h.x && x <= h.x + h.width && y >= h.y && y <= h.y + h.height) { hit = h; break; }
     }
-    if (hit?.feature) onFeature(hit.id);
+    if (hit?.geological) onGeoSite(hit.id);
+    else if (hit?.feature) onFeature(hit.id);
     else if (hit) onNavigate(hit.id);
   }
   function zoom(factor) {
@@ -740,6 +748,7 @@ export function createCoastMap(container, { onNavigate = () => {}, onFeature = (
       }
     },
     setDepth(value) { depth = clamp(Number(value) || 0, 0, 30); },
+    setGeo(state) { geo = state; },
     setExpansion(value) { expansion = clamp(Number(value) || 0, 0, 100); },
     setNight(value) { if (night !== Boolean(value)) { night = Boolean(value); atlas = null; } },
     setExperiment(id, active) {

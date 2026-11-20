@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0d151d">
-  <meta name="description" content="从峡谷水库飞到潮滩和外海断崖，亲手试试泵站、船闸、潮水、隧道换气和建筑传力。">
+  <meta name="description" content="把整座城翻开。对照山脚、街区、江岸和港区的基岩、地下水、桩基和水管。">
   <meta property="og:title" content="切开城市｜你每天经过的地方，底下还有什么？">
   <meta property="og:description" content="一座可以飞过去、切开看、亲手做实验的海湾城市。">
   <title>切开城市 · City Cutaway</title>
-  <link rel="stylesheet" href="./style.css?v=20261120.6">
+  <link rel="stylesheet" href="./style.css?v=20261120.7">
 </head>
 <body>
-  <main id="app" class="shell" data-mode="atlas">
+  <main id="app" class="shell" data-mode="geo">
     <header class="header">
       <div class="identity">
         <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -20,7 +20,8 @@
       <a class="source" href="https://github.com/Elcongroo/city-cutaway" target="_blank" rel="noopener">GitHub 源码</a>
     </header>
     <nav id="places" class="places" aria-label="飞往区域">
-      <button data-route="atlas" type="button" aria-current="page">全域总览</button>
+      <button data-route="geo" type="button" class="section-tab" aria-current="page">地底全景</button>
+      <button data-route="atlas" type="button">地表总览</button>
       <button data-route="reservoir" type="button">峡谷水库</button>
       <button data-route="hill" type="button">山谷</button>
       <button data-route="rural" type="button">河谷农田</button>
@@ -48,8 +49,8 @@
     <section class="stage" aria-label="可探索的海湾城市">
       <div id="viewport" class="viewport"></div>
       <div class="view-heading">
-        <h2 id="scene-title">水从山里来，城市一路长到海边</h2>
-        <p id="scene-intro">越过峡谷水库、两岸城区和潮滩，再到外海断崖。江底还有一座会报警的泵站。</p>
+        <h2 id="scene-title">把整座城翻开</h2>
+        <p id="scene-intro">沿一条从山脚到海边的地下剖面，看脚下的给水管、穿过软土的桩和更深处的岩层。</p>
       </div>
       <div class="camera-tools" aria-label="画面">
         <div class="formats" aria-label="渲染方式">
@@ -67,8 +68,15 @@
         <button type="button" id="angle" aria-pressed="false">俯瞰</button>
       </div>
       <div class="flight-controls" aria-label="浏览方式">
+        <button type="button" id="geo-home">看全线剖面</button>
         <button type="button" id="cut-cta" class="primary-action">切开江底</button>
         <button type="button" id="tour" aria-pressed="false">沿江巡游</button>
+      </div>
+      <div id="geo-key" class="geo-key" aria-label="剖面图例">
+        <span><i class="legend-water"></i>地下水位</span>
+        <span><i class="legend-supply"></i>给水管</span>
+        <span><i class="legend-sewer"></i>重力排水</span>
+        <span><i class="legend-foundation"></i>基础</span>
       </div>
       <div id="case-panel" class="case-panel" hidden>
         <div class="control-heading"><label id="case-label" for="case-level"></label><output id="case-value" for="case-level"></output></div>
@@ -93,6 +101,10 @@
     </section>
 
     <div class="below-stage">
+      <section id="geo-toolbar" class="geo-toolbar" aria-label="地下剖面巡查">
+        <div id="geo-sites" class="features" aria-label="选择地段"></div>
+        <div id="geo-filters" class="features" aria-label="选择剖面内容"></div>
+      </section>
       <div id="render-note" class="render-note" role="status" hidden></div>
 
       <div class="dock">
@@ -124,6 +136,9 @@
             <h3 id="guide-heading">一条河能串起什么？</h3>
             <p id="guide-copy">山谷来水经过农田和两岸城区，接上城中湖，最后汇入海湾。</p>
           </div>
+          <div id="geo-measures" class="geo-measures" hidden></div>
+          <ol id="geo-layers" class="geo-layers" hidden></ol>
+          <p id="geo-model-note" class="geo-model-note" hidden>深度自模型地表起算。管线量到管中心，基础量到基底或桩尖。纵向放大 1.45 倍。</p>
           <div id="features" class="features" aria-label="观察位置"></div>
           <div class="guide-actions">
             <a id="case-source" target="_blank" rel="noopener" hidden></a>
@@ -136,6 +151,6 @@
     </div>
     <footer>虚构海湾城市 · 地形、设施尺寸及实验数值为演示示意</footer>
   </main>
-  <script type="module" src="./app.js?v=20261120.5.1"></script>
+  <script type="module" src="./app.js?v=20261120.7"></script>
 </body>
 </html>
