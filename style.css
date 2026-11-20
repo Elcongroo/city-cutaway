@@ -148,4 +148,6 @@ footer { padding: 13px 0 18px; color: var(--muted); font-size: .8125rem; text-al
   .intro-hint { max-width: 8rem; }
   .layer-status .rail-dot, .depth-rail .rail-dot { display: none; }
   .dock { padding-inline: 12px; }
+  .experiment-buttons { gap: 5px; }
+  .experiment-buttons button { gap: 4px; padding-inline: 6px; font-size: .8125rem; }
 }
