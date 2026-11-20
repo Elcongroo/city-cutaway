@@ -2,7 +2,7 @@ export const destinations = {
   atlas: {
     label: '全域总览',
     title: '从山谷到海港',
-    intro: '沿着一条河飞过农田、湖泊和两岸城区，再从江面潜入城市的地下。',
+    intro: '从山谷飞越两岸天际线，沿河一直看到外海。也可以潜入江底，跟着一列地铁过江。',
     focus: [0, 5, 2], span: 274, yaw: 0.34, pitch: 0.53, accent: '#d0edce',
     question: '一条河能串起什么？',
     detail: '山谷来水穿过农田和两岸城区，接上城中湖，最后汇入海湾。点画面上的地点，镜头会沿着这片地形飞过去。',
@@ -55,6 +55,22 @@ export const destinations = {
     question: '港口为什么需要长长的岸线？',
     detail: '船靠岸以后，吊机在码头卸货，箱子先进入堆场，再从港区道路进入城市交通网。港池给船留出掉头和靠泊的空间。',
   },
+  skyline: {
+    label: '北岸新城',
+    title: '天际线后面，还有一座城',
+    intro: '飞到北岸的双塔、空中连廊和远处的铁路进城方向。',
+    focus: [0, 16, -115], span: 152, yaw: 0.27, pitch: 0.49, accent: '#a9ddfa',
+    question: '高楼为什么常沿着主要道路聚集？',
+    detail: '在这片新区里，街道和交通走廊把高密度街坊连起来。站在双塔旁回望，能看到它和老城区之间的距离与连接。',
+  },
+  offshore: {
+    label: '外海航道',
+    title: '跟着船，从城市出海',
+    intro: '沿着码头外的水域飞过去，看主航道、岛屿和港口的相对位置。',
+    focus: [165, 3, 20], span: 176, yaw: 0.33, pitch: 0.57, accent: '#8fe9ed',
+    question: '走到海上，什么还在组织交通？',
+    detail: '船从港池驶向开阔水域，航道把港口和远处的海上运输接起来。远离码头后，留给转向和会船的空间更开阔。',
+  },
   building: {
     label: '建筑拆解',
     title: '就在这条街上，拆开一栋楼',
@@ -80,7 +96,7 @@ export const buildingParts = {
   foundation: { label: '基础', question: '整栋楼的重量最后落在哪？', detail: '梁、柱和承重墙把重量逐层向下传，基础把力传给更大的地面范围。' },
 };
 
-export const tourStops = ['hill', 'rural', 'lake', 'plain', 'river', 'harbor'];
+export const tourStops = ['hill', 'rural', 'lake', 'skyline', 'plain', 'river', 'harbor', 'offshore'];
 
 export const experiments = {
   hill: { play: '点亮山路', stop: '隐藏山路', note: '沿亮线看山路如何转弯爬坡' },

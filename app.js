@@ -1,606 +1,517 @@
-import * as THREE from './vendor/three.module.js';
-import { createBuilding } from './building.js';
-import { createCoastTerrain, groundY, riverZ } from './coast-terrain.js';
-import { createCoastCity } from './coast-city.js';
-import { createCoastInfrastructure } from './coast-infrastructure.js';
-import { createCoastExperiments } from './coast-effects.js';
-import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js';
+import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.5';
+import { cases } from './coast-cases.js';
 
 const ui = Object.fromEntries([
-  'app', 'viewport', 'loading', 'places', 'pins', 'scene-title', 'scene-intro', 'night', 'reset-view', 'fullscreen',
-  'tour', 'cut-cta', 'view-status', 'controls', 'slider-panel', 'range-label', 'range-value', 'depth', 'scale',
-  'follow', 'experiment-panel', 'experiment-note', 'experiment', 'garden', 'replay', 'rain-progress',
-  'guide-heading', 'guide-copy', 'features',
+  'app', 'viewport', 'loading', 'places', 'scene-title', 'scene-intro', 'night', 'reset-view', 'fullscreen',
+  'tour', 'cut-cta', 'view-status', 'zoom-in', 'zoom-out', 'angle', 'use-3d', 'use-map', 'render-note',
+  'controls', 'slider-panel', 'range-label', 'range-value', 'depth', 'scale', 'follow', 'experiment-panel',
+  'experiment-note', 'experiment', 'garden', 'replay', 'rain-progress', 'guide-heading', 'guide-copy',
+  'features', 'case-buttons', 'case-panel', 'case-label', 'case-level', 'case-value', 'case-feedback',
+  'case-source', 'share', 'share-result', 'share-field', 'share-location',
 ].map(id => [id, document.getElementById(id)]));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
-const { clamp, damp, lerp, degToRad } = THREE.MathUtils;
 const maximumDepth = 30;
+const nav = [...ui.places.querySelectorAll('[data-route]')];
+const choices = [...ui['case-buttons'].querySelectorAll('[data-case]')];
+const activeExperiments = new Map();
+const failureCopy = {
+  'no-webgl2': '这个浏览器未能提供 WebGL 2，已切换到互动地图。',
+  'context-lost': '浏览器的 3D 环境中断，已切换到互动地图。',
+  'renderer-init': '这个浏览器未能初始化 3D 渲染器，已切换到互动地图。',
+  'scene-init': '3D 场景初始化失败，已切换到互动地图。',
+  'shader-init': '浏览器无法编译部分 3D 材质，已切换到互动地图。',
+  'render-failed': '3D 画面运行中断，已切换到互动地图。',
+  'module-load': '3D 资源未能加载，已切换到互动地图。',
+};
 
-function start() {
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
-  renderer.setClearColor(0, 0);
-  renderer.localClippingEnabled = true;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.17;
-  const canvas = renderer.domElement;
-  ui.viewport.append(canvas);
+let activeView;
+let pendingVersion = 0;
+let pinnedFormat;
+let mode;
+let caseId;
+let level = 0;
+let depth = 0;
+let expansion = 0;
+let selected;
+let following = false;
+let night = false;
+let garden = false;
+let tourIndex = -1;
+let tourTimer;
+let playbackId;
+let features = [];
 
-  const scene = new THREE.Scene();
-  const dayFog = new THREE.Color(0x5b788a);
-  const nightFog = new THREE.Color(0x263551);
-  scene.fog = new THREE.FogExp2(dayFog, 0.00091);
-  const camera = new THREE.PerspectiveCamera(41, 1, 0.3, 2300);
-  const daySky = new THREE.Color(0xe3f4ff);
-  const nightSky = new THREE.Color(0x788ac4);
-  const ambient = new THREE.HemisphereLight(daySky, 0x8b8277, 2.1);
-  const sun = new THREE.DirectionalLight(0xffe3b8, 2.65);
-  sun.position.set(-95, 160, 74);
-  const fill = new THREE.DirectionalLight(0x9bc8fa, 1.35);
-  fill.position.set(98, 53, -94);
-  scene.add(ambient, sun, fill);
+function clamp(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, Math.round(value)));
+}
 
-  const terrain = createCoastTerrain(scene);
-  const city = createCoastCity(scene);
-  const infrastructure = createCoastInfrastructure(scene);
-  const experiment = createCoastExperiments(scene);
-  for (const material of city.cutMaterials || []) {
-    material.clippingPlanes = terrain.cutPlanes;
-    material.clipIntersection = true;
+function throughView(method, ...args) {
+  return activeView?.adapter?.[method]?.(...args);
+}
+
+function detailSet() {
+  if (mode === 'river') return underground;
+  if (mode === 'building') return buildingParts;
+  return {};
+}
+
+function inputValue(input, output, value, suffix, ariaText) {
+  input.value = value;
+  output.value = value + suffix;
+  input.style.setProperty('--fill', (value / Number(input.max)) * 100 + '%');
+  input.setAttribute('aria-valuetext', ariaText);
+}
+
+function refreshRange() {
+  ui.depth.max = mode === 'building' ? 100 : maximumDepth;
+  if (mode === 'building') inputValue(ui.depth, ui['range-value'], expansion, '%', '展开 ' + expansion + '%');
+  else inputValue(ui.depth, ui['range-value'], depth, ' m', depth ? '地下 ' + depth + ' 米' : '江面');
+  ui['cut-cta'].textContent = mode === 'river' && depth ? '合上剖面' : '切开江底';
+}
+
+function renderGuide() {
+  const profile = destinations[mode];
+  const discovery = cases[caseId];
+  const item = detailSet()[selected];
+  ui['guide-heading'].textContent = discovery?.title || item?.question || profile.question;
+  ui['guide-copy'].textContent = discovery?.intro || item?.detail || profile.detail;
+  ui['case-source'].hidden = !discovery;
+  if (discovery) [ui['case-source'].textContent, ui['case-source'].href] = discovery.source;
+  for (const [id, node] of features) node.setAttribute('aria-pressed', id === selected && !caseId);
+}
+
+function renderCase() {
+  const discovery = cases[caseId];
+  const profile = destinations[mode];
+  ui.app.style.setProperty('--accent', discovery?.accent || profile.accent);
+  if (caseId) ui.app.dataset.case = caseId;
+  else delete ui.app.dataset.case;
+  ui['case-panel'].hidden = !discovery;
+  for (const node of choices) node.setAttribute('aria-pressed', node.dataset.case === caseId);
+  if (discovery) {
+    ui['case-label'].textContent = discovery.control;
+    inputValue(ui['case-level'], ui['case-value'], level, '%', discovery.control + ' ' + level + '%');
+    const neutral = caseId === 'pump' && level >= 49 && level <= 51;
+    const message = neutral ? '排水泵以中等速度工作' : (level < 50 ? discovery.low : discovery.high);
+    if (ui['case-feedback'].textContent !== message) ui['case-feedback'].textContent = message;
   }
+  renderGuide();
+}
 
-  const property = new THREE.Group();
-  const propertyGround = groundY(-34, -27);
-  property.position.set(-34, propertyGround, -27);
-  scene.add(property);
-  const building = createBuilding(property);
-  building.update(0, 0, 0, null);
+function makeButton(label, action) {
+  const node = document.createElement('button');
+  node.type = 'button';
+  node.textContent = label;
+  node.addEventListener('click', action);
+  return node;
+}
 
-  const places = [
-    ['hill', new THREE.Vector3(-93, groundY(-93, -37) + 3.7, -37)],
-    ['rural', new THREE.Vector3(-83, groundY(-83, 43) + 3.3, 43)],
-    ['lake', city.landmarks.lake.clone().add(new THREE.Vector3(0, 2.2, 0))],
-    ['plain', city.landmarks.northSkyline.clone().add(new THREE.Vector3(0, 3, 0))],
-    ['river', new THREE.Vector3(8, 2.4, riverZ(8) + 5)],
-    ['harbor', city.landmarks.harbor.clone()],
-    ['building', new THREE.Vector3(-34, propertyGround + 14.0, -27)],
-  ];
+function renderControls() {
+  const profile = destinations[mode];
+  ui.app.dataset.mode = mode;
+  ui['scene-title'].textContent = profile.title;
+  ui['scene-intro'].textContent = profile.intro;
+  const usesSlider = mode === 'river' || mode === 'building';
+  ui['slider-panel'].hidden = !usesSlider;
+  ui.controls.hidden = !usesSlider && !experiments[mode];
+  ui.follow.hidden = mode !== 'river';
+  ui['range-label'].textContent = mode === 'building' ? '建筑展开度' : '剖面深度';
+  const marks = mode === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['江面', '10 m', '20 m', '30 m'];
+  ui.scale.replaceChildren(...marks.map(label => {
+    const mark = document.createElement('span');
+    mark.textContent = label;
+    return mark;
+  }));
+  for (const node of nav) {
+    if (mode === node.dataset.route) node.setAttribute('aria-current', 'page');
+    else node.removeAttribute('aria-current');
+  }
+  features = Object.entries(detailSet()).map(([id, item]) => {
+    const node = makeButton(item.label, () => selectPart(id));
+    if (item.color) node.style.setProperty('--pin-color', item.color);
+    return [id, node];
+  });
+  ui.features.replaceChildren(...features.map(([, node]) => node));
+  ui['share-result'].textContent = '';
+  ui['share-field'].hidden = true;
+  resetAngle();
+  refreshRange();
+  refreshExperiment();
+  renderCase();
+}
 
-  const current = {
-    focus: new THREE.Vector3(),
-    span: destinations.atlas.span,
-    yaw: destinations.atlas.yaw,
-    pitch: destinations.atlas.pitch,
+function resetAngle() {
+  ui.angle.setAttribute('aria-pressed', 'false');
+  ui.angle.textContent = '俯瞰';
+}
+
+function refreshExperiment() {
+  const configuration = experiments[mode];
+  const active = Boolean(activeExperiments.get(mode));
+  ui['experiment-panel'].hidden = !configuration;
+  ui.garden.hidden = mode !== 'plain';
+  ui.replay.hidden = mode !== 'plain';
+  ui.replay.disabled = !active;
+  ui['rain-progress'].hidden = mode !== 'plain' || typeof activeView?.adapter.progress !== 'function';
+  if (configuration) {
+    ui.experiment.textContent = active ? configuration.stop : configuration.play;
+    ui.experiment.setAttribute('aria-pressed', active);
+    ui['experiment-note'].textContent = active ? configuration.note : '';
+  }
+}
+
+function setFollowing(value, notifyView = true) {
+  if (following === value) return;
+  if (value) {
+    stopTour();
+    if (caseId) closeCase();
+    if (depth < 16) setDepth(20);
+    selected = 'metro';
+    throughView('selectPart', selected, false);
+  }
+  following = value;
+  if (notifyView) throughView('setFollowing', value);
+  ui.follow.textContent = value ? '退出跟拍' : '跟拍地铁';
+  ui.follow.setAttribute('aria-pressed', value);
+  renderGuide();
+}
+
+function setDepth(value) {
+  depth = clamp(value, 0, maximumDepth);
+  if (following && depth < 16) setFollowing(false);
+  if (caseId && mode === 'river' && depth < 26) closeCase();
+  throughView('setDepth', depth);
+  refreshRange();
+}
+
+function setExpansion(value) {
+  expansion = clamp(value, 0, 100);
+  if (caseId === 'load' && expansion < 30) closeCase();
+  throughView('setExpansion', expansion);
+  refreshRange();
+}
+
+function selectPart(id) {
+  const detail = detailSet()[id];
+  if (!detail) return;
+  stopTour();
+  setFollowing(false);
+  if (caseId) closeCase();
+  selected = id;
+  if (mode === 'river' && depth < detail.depth) setDepth(detail.depth);
+  if (mode === 'building' && expansion < 68) setExpansion(82);
+  throughView('selectPart', id);
+  renderGuide();
+}
+
+function parseLocation() {
+  const url = new URL(location.href);
+  const request = url.hash.slice(1);
+  const found = url.searchParams.get('case');
+  const discovery = Object.hasOwn(cases, found) ? cases[found] : null;
+  const rawLevel = url.searchParams.get('level');
+  const numeric = rawLevel !== null ? Number(rawLevel) : NaN;
+  return {
+    mode: discovery?.mode || (Object.hasOwn(destinations, request) ? request : 'atlas'),
+    caseId: discovery ? found : undefined,
+    level: Number.isFinite(numeric) ? clamp(numeric, 0, 100) : discovery?.initial,
+    format: url.searchParams.get('view') === 'map' ? 'map' : undefined,
   };
-  const desired = { ...current, focus: new THREE.Vector3() };
-  const offset = new THREE.Vector3();
-  const projected = new THREE.Vector3();
-  const anchor = new THREE.Vector3();
-  const train = new THREE.Vector3();
-  const nav = [...ui.places.querySelectorAll('[data-route]')];
-  const activeExperiments = new Map();
+}
 
-  let mode;
-  let selected;
-  let depth = 0;
-  let cut = 0;
-  let expansion = 0;
-  let opened = 0;
-  let night = false;
-  let nightLevel = 0;
-  let following = false;
-  let garden = false;
-  let pins = [];
-  let featureButtons = [];
-  let flight;
-  let tour;
-  let time = 0;
-  let last = 0;
-  let showing = true;
-  let rendering = true;
-  let renderFrame = 0;
-  let width = 1;
-  let height = 1;
-
-  function poseFor(id) {
-    const profile = destinations[id];
-    const focus = new THREE.Vector3(...profile.focus);
-    if (id === 'building') focus.y += propertyGround;
-    return { focus, span: profile.span, yaw: profile.yaw, pitch: profile.pitch };
+function link() {
+  const url = new URL(location.pathname, location.origin);
+  url.hash = mode;
+  if (caseId) {
+    url.searchParams.set('case', caseId);
+    url.searchParams.set('level', String(level));
   }
+  if (pinnedFormat === 'map') url.searchParams.set('view', 'map');
+  return url;
+}
 
-  function blendPose(target, amount) {
-    current.focus.lerp(target.focus, amount);
-    current.span = lerp(current.span, target.span, amount);
-    current.yaw = lerp(current.yaw, target.yaw, amount);
-    current.pitch = lerp(current.pitch, target.pitch, amount);
-  }
+function writeLocation(replace = false) {
+  const url = link();
+  if (url.href !== location.href) history[replace ? 'replaceState' : 'pushState'](null, '', url);
+}
 
-  function flyTo(target, immediate = false) {
-    desired.focus.copy(target.focus);
-    desired.span = target.span;
-    desired.yaw = target.yaw;
-    desired.pitch = target.pitch;
-    if (immediate || reduceMotion.matches) {
-      flight = undefined;
-      blendPose(desired, 1);
-      return;
-    }
-    const distance = current.focus.distanceTo(target.focus);
-    flight = {
-      from: { ...current, focus: current.focus.clone() },
-      spanLift: clamp(distance * 0.27, 3, 44),
-      heightLift: clamp(distance * 0.098, 1.2, 19),
-      duration: clamp(0.88 + distance * 0.0084 + Math.abs(current.span - target.span) * 0.003, 0.92, 2.5),
-      time: 0,
-    };
-  }
+function closeCase() {
+  caseId = undefined;
+  throughView('setDiscover', null, 0);
+  renderCase();
+  writeLocation(true);
+}
 
-  function updateCamera(dt) {
-    if (following) {
-      infrastructure.getTrainPosition(train);
-      desired.focus.set(train.x * 0.67 + 3, train.y + 5.2, clamp(train.z, -15, 48));
-    }
-    if (flight) {
-      flight.time = Math.min(flight.duration, flight.time + dt);
-      const fraction = flight.time / flight.duration;
-      const ease = fraction * fraction * (3 - 2 * fraction);
-      const arc = Math.sin(Math.PI * ease);
-      current.focus.lerpVectors(flight.from.focus, desired.focus, ease);
-      current.focus.y += arc * flight.heightLift;
-      current.span = lerp(flight.from.span, desired.span, ease) + arc * flight.spanLift;
-      current.yaw = lerp(flight.from.yaw, desired.yaw, ease);
-      current.pitch = lerp(flight.from.pitch, desired.pitch, ease);
-      if (fraction >= 1) {
-        flight = undefined;
-        updateStatus();
-      }
-    } else {
-      const easing = reduceMotion.matches ? 1 : 1 - Math.exp(-dt * 7);
-      blendPose(desired, easing);
-    }
+function applyStateToView(adapter, immediate) {
+  adapter.setMode(mode, immediate);
+  adapter.setDepth(depth);
+  adapter.setExpansion(expansion);
+  adapter.setNight(night);
+  adapter.setExperiment(mode, Boolean(activeExperiments.get(mode)));
+  adapter.setGarden?.(garden);
+  adapter.selectPart?.(selected, false);
+  adapter.setDiscover(caseId || null, level, Boolean(caseId));
+  adapter.setFollowing?.(following);
+}
 
-    const halfVertical = Math.tan(degToRad(camera.fov / 2));
-    const distance = Math.max(current.span / camera.aspect, current.span * 0.55) / (2 * halfVertical);
-    const horizontal = Math.cos(current.pitch) * distance;
-    offset.set(Math.sin(current.yaw) * horizontal, Math.sin(current.pitch) * distance, Math.cos(current.yaw) * horizontal);
-    camera.position.copy(current.focus).add(offset);
-    const increase = Math.max(0, groundY(camera.position.x, camera.position.z) + 4 - camera.position.y);
-    camera.position.y += increase;
-    camera.lookAt(current.focus);
-    camera.updateMatrixWorld();
-  }
-
-  function button(label, action) {
-    const node = document.createElement('button');
-    node.type = 'button';
-    node.textContent = label;
-    node.addEventListener('click', action);
-    return node;
-  }
-
-  function detailSet() {
-    if (mode === 'river') return underground;
-    if (mode === 'building') return buildingParts;
-    return {};
-  }
-
-  function updateGuide() {
-    const item = detailSet()[selected] || destinations[mode];
-    ui['guide-heading'].textContent = item.question;
-    ui['guide-copy'].textContent = item.detail;
-    for (const [id, node] of featureButtons) node.setAttribute('aria-pressed', selected === id);
-    for (const pin of pins) if (pin.part) pin.node.setAttribute('aria-pressed', selected === pin.id);
-  }
-
-  function selectPart(id) {
-    const item = detailSet()[id];
-    if (!item) return;
-    stopTour();
-    setFollowing(false);
-    selected = id;
-    if (mode === 'river' && depth < item.depth) setDepth(item.depth);
-    if (mode === 'building' && expansion < 72) setExpansion(82);
-    updateGuide();
-  }
-
-  function updateStatus() {
-    let message = '';
-    if (following) message = '正在跟拍过江地铁';
-    else if (flight) message = '正在飞往' + destinations[mode].label;
-    else if (mode === 'river' && depth) message = '剖面深度 ' + depth + ' m';
-    else if (tour) message = '沿江巡游 ' + (tour.index + 1) + ' / ' + tourStops.length;
-    if (ui['view-status'].textContent !== message) ui['view-status'].textContent = message;
-  }
-
-  function setupPins() {
-    pins = places
-      .filter(([id]) => id !== mode && (id !== 'building' || mode === 'plain' || mode === 'lake'))
-      .map(([id, point]) => ({ id, point, label: destinations[id].label, color: destinations[id].accent }));
-    if (mode === 'river') {
-      for (const [id, point] of Object.entries(infrastructure.features)) {
-        const item = underground[id];
-        if (item) pins.push({ id, point, label: item.label, color: item.color, part: true, minimum: item.depth - 2 });
-      }
-    }
-    if (mode === 'building') {
-      for (const { id, position } of building.hotspots) {
-        pins.push({ id, point: position, label: buildingParts[id].label, part: true, local: true });
-      }
-    }
-    pins = pins.map(pin => {
-      const node = button(pin.label, () => pin.part ? selectPart(pin.id) : navigate(pin.id));
-      node.className = 'pin';
-      node.hidden = true;
-      if (pin.color) node.style.setProperty('--pin-color', pin.color);
-      return { ...pin, node, labelWidth: 0 };
-    });
-    ui.pins.replaceChildren(...pins.map(pin => pin.node));
-    featureButtons = Object.entries(detailSet()).map(([id, item]) => {
-      const node = button(item.label, () => selectPart(id));
-      if (item.color) node.style.setProperty('--pin-color', item.color);
-      return [id, node];
-    });
-    ui.features.replaceChildren(...featureButtons.map(([, node]) => node));
-  }
-
-  function renderPins() {
-    const placed = [];
-    for (const pin of pins) {
-      if (following || ((mode === 'river' || mode === 'building') && !pin.part)
-          || (pin.minimum ?? 0) > cut || (pin.local && opened < 0.2 && pin.id !== 'roof')) {
-        pin.node.hidden = true;
-        continue;
-      }
-      anchor.copy(pin.point);
-      if (pin.local) anchor.add(property.position);
-      projected.copy(anchor).project(camera);
-      const outside = Math.abs(projected.x) > 0.98 || Math.abs(projected.y) > 0.91 || Math.abs(projected.z) > 1;
-      pin.node.hidden = outside;
-      if (outside) continue;
-      const labelWidth = pin.labelWidth || (pin.labelWidth = pin.node.offsetWidth);
-      const x = clamp((projected.x + 1) * width / 2, labelWidth / 2 + 5, width - labelWidth / 2 - 5);
-      let y = (1 - projected.y) * height / 2;
-      for (const other of placed) {
-        if (Math.abs(other.x - x) < (other.width + labelWidth) / 2 + 5 && Math.abs(other.y - y) < 33) {
-          y = other.y - 33;
-        }
-      }
-      y = clamp(y, 42, height - (width < 650 ? 52 : 61));
-      placed.push({ x, y, width: labelWidth });
-      pin.node.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0) translate(-50%,calc(-100% - 7px))';
-    }
-  }
-
-  function refreshRange() {
-    const type = mode === 'building' ? 'building' : 'cut';
-    ui.depth.max = type === 'building' ? 100 : maximumDepth;
-    const value = type === 'building' ? expansion : depth;
-    ui.depth.value = value;
-    ui.depth.style.setProperty('--fill', (value / Number(ui.depth.max)) * 100 + '%');
-    ui['range-value'].value = value + (type === 'building' ? '%' : ' m');
-    ui.depth.setAttribute('aria-valuetext', type === 'building' ? '展开 ' + value + '%' : (value ? '地下 ' + value + ' 米' : '地表'));
-    ui['cut-cta'].textContent = mode === 'river' && depth > 0 ? '合上剖面' : '切开江底';
-    updateStatus();
-  }
-
-  function setDepth(next) {
-    depth = clamp(Math.round(next), 0, maximumDepth);
-    if (following && depth < 16) setFollowing(false);
-    refreshRange();
-  }
-
-  function setExpansion(next) {
-    expansion = clamp(Math.round(next), 0, 100);
-    refreshRange();
-  }
-
-  function refreshExperiment() {
-    const config = experiments[mode];
-    const enabled = Boolean(activeExperiments.get(mode));
-    const isRain = mode === 'plain';
-    experiment.set(mode, enabled);
-    ui['experiment-panel'].hidden = !config;
-    ui.garden.hidden = !isRain;
-    ui.replay.hidden = !isRain;
-    ui.replay.disabled = !enabled;
-    ui['rain-progress'].hidden = !isRain;
-    ui.experiment.setAttribute('aria-pressed', enabled);
-    if (config) {
-      ui.experiment.textContent = enabled ? config.stop : config.play;
-      ui['experiment-note'].textContent = enabled ? config.note : '';
-    }
-  }
-
-  function refreshMode() {
-    const profile = destinations[mode];
-    ui.app.dataset.mode = mode;
-    ui.app.style.setProperty('--accent', profile.accent);
-    ui['scene-title'].textContent = profile.title;
-    ui['scene-intro'].textContent = profile.intro;
-    const slider = mode === 'river' || mode === 'building';
-    ui['slider-panel'].hidden = !slider;
-    ui.controls.hidden = !slider && !experiments[mode];
-    ui.follow.hidden = mode !== 'river';
-    ui['range-label'].textContent = mode === 'building' ? '建筑展开度' : '剖面深度';
-    const marks = mode === 'building' ? ['合拢', '25%', '50%', '75%', '完全展开'] : ['江面', '10 m', '20 m', '30 m'];
-    ui.scale.replaceChildren(...marks.map(label => {
-      const mark = document.createElement('span');
-      mark.textContent = label;
-      return mark;
-    }));
-    for (const node of nav) {
-      if (mode === node.dataset.route) node.setAttribute('aria-current', 'page');
-      else node.removeAttribute('aria-current');
-    }
-    setupPins();
-    refreshExperiment();
-    refreshRange();
-    updateGuide();
-  }
-
-  function setMode(id, immediate = false) {
-    if (id === mode && !immediate) return;
-    mode = id;
+function enter(id, discoveryId, value, { immediate = false, preserve = false } = {}) {
+  if (!Object.hasOwn(destinations, id)) return;
+  const sceneChanged = mode !== id;
+  mode = id;
+  caseId = discoveryId;
+  if (caseId) level = clamp(value ?? cases[caseId].initial, 0, 100);
+  selected = undefined;
+  if (following) {
     following = false;
-    ui.follow.setAttribute('aria-pressed', 'false');
     ui.follow.textContent = '跟拍地铁';
-    selected = undefined;
-    depth = id === 'river' ? maximumDepth : 0;
-    if (id === 'building') expansion = 58;
-    flyTo(poseFor(id), immediate);
-    refreshMode();
-    updateStatus();
+    ui.follow.setAttribute('aria-pressed', 'false');
   }
-
-  function navigate(id, automatic = false) {
-    if (!automatic) stopTour();
-    if (mode === id) return;
-    if (automatic) history.replaceState(null, '', '#' + id);
-    else history.pushState(null, '', '#' + id);
-    setMode(id);
+  if (sceneChanged || !preserve) {
+    depth = mode === 'river' ? maximumDepth : 0;
+    if (mode === 'building') expansion = caseId === 'load' ? 82 : 58;
   }
+  if (caseId && mode === 'river') depth = Math.max(depth, 28);
+  if (caseId === 'load') expansion = Math.max(expansion, 82);
+  if (activeView) applyStateToView(activeView.adapter, immediate);
+  renderControls();
+}
 
-  function routeFromHash() {
-    const id = window.location.hash.slice(1);
-    return Object.hasOwn(destinations, id) ? id : 'atlas';
+function navigate(id, automatic = false) {
+  if (!automatic) stopTour();
+  if (id === mode && !caseId) return;
+  enter(id);
+  writeLocation(automatic);
+}
+
+function chooseCase(id) {
+  if (!Object.hasOwn(cases, id)) return;
+  stopTour();
+  if (caseId === id) {
+    closeCase();
+    return;
   }
+  enter(cases[id].mode, id, cases[id].initial);
+  writeLocation();
+  ui.viewport.parentElement?.scrollIntoView({ block: 'nearest', behavior: reduceMotion.matches ? 'instant' : 'smooth' });
+}
 
-  function stopTour() {
-    if (!tour) return;
-    tour = undefined;
-    ui.tour.textContent = '沿江巡游';
-    ui.tour.setAttribute('aria-pressed', 'false');
-    updateStatus();
+function stopTour() {
+  if (tourIndex < 0) return;
+  clearTimeout(tourTimer);
+  tourIndex = -1;
+  ui.tour.textContent = '沿江巡游';
+  ui.tour.setAttribute('aria-pressed', 'false');
+}
+
+function nextTourStop() {
+  const id = tourStops[tourIndex++];
+  if (!id) return stopTour();
+  navigate(id, true);
+  tourTimer = setTimeout(nextTourStop, id === 'river' ? 9600 : 6900);
+}
+
+function onInteract() {
+  stopTour();
+  if (following) setFollowing(false, false);
+}
+
+function setFormatUI(kind, reason = '') {
+  ui.app.dataset.render = kind;
+  const is3D = kind === '3d';
+  ui['use-3d'].setAttribute('aria-pressed', is3D);
+  ui['use-map'].setAttribute('aria-pressed', !is3D);
+  ui.angle.hidden = typeof activeView?.adapter.toggleAngle !== 'function';
+  resetAngle();
+  ui['zoom-in'].hidden = ui['zoom-out'].hidden = typeof activeView?.adapter.zoom !== 'function';
+  ui['render-note'].hidden = !reason;
+  ui['render-note'].textContent = reason;
+  refreshExperiment();
+}
+
+async function mount(kind, note = '') {
+  const edition = ++pendingVersion;
+  if (activeView?.kind === kind) {
+    setFormatUI(kind, note);
+    return;
   }
-
-  function updateTour(dt) {
-    if (!tour || flight || following) return;
-    tour.wait += dt;
-    if (tour.wait < (mode === 'river' ? 7 : 4.3)) return;
-    if (++tour.index >= tourStops.length) {
-      stopTour();
+  const layer = document.createElement('div');
+  layer.className = 'renderer-layer';
+  layer.style.visibility = 'hidden';
+  ui.viewport.append(layer);
+  ui.loading.hidden = Boolean(activeView);
+  ui.loading.textContent = kind === '3d' ? '正在搭建海湾城市…' : '正在绘制互动地图…';
+  let adapter;
+  try {
+    const options = {
+      onNavigate: navigate,
+      onFeature: selectPart,
+      onInteract,
+      onStatus(text) { if (activeView?.layer === layer) ui['view-status'].textContent = text; },
+      onError(error) {
+        if (activeView?.layer !== layer) return;
+        console.error(error);
+        mount('map', failureCopy[error.code] || failureCopy['render-failed']);
+      },
+    };
+    if (kind === '3d') {
+      const { createCoast3D } = await import('./coast-3d.js');
+      if (edition !== pendingVersion) { layer.remove(); return; }
+      adapter = createCoast3D(layer, options);
+    } else {
+      const { createCoastMap } = await import('./coast-map.js');
+      if (edition !== pendingVersion) { layer.remove(); return; }
+      adapter = createCoastMap(layer, options);
+    }
+    applyStateToView(adapter, true);
+    const previous = activeView;
+    activeView = { adapter, layer, kind };
+    layer.style.visibility = '';
+    previous?.adapter.destroy();
+    previous?.layer.remove();
+    ui['view-status'].textContent = '';
+    setFormatUI(kind, note);
+    adapter.start?.();
+    ui.loading.hidden = true;
+  } catch (error) {
+    adapter?.destroy();
+    layer.remove();
+    if (edition !== pendingVersion) return;
+    console.error(error);
+    const reason = failureCopy[error.code] || failureCopy['module-load'];
+    if (kind === '3d' && activeView?.kind === 'map') {
+      setFormatUI('map', reason);
+      ui.loading.hidden = true;
       return;
     }
-    tour.wait = 0;
-    navigate(tourStops[tour.index], true);
-  }
-
-  function setFollowing(active) {
-    if (active) {
-      stopTour();
-      if (depth < 16) setDepth(20);
-      selected = 'metro';
-      infrastructure.getTrainPosition(train);
-      const focus = new THREE.Vector3(train.x * 0.67 + 3, train.y + 5.2, clamp(train.z, -15, 48));
-      flyTo({ focus, span: 70, yaw: 0.59, pitch: 0.42 });
-    } else if (following) {
-      flyTo(poseFor(mode));
-    }
-    following = active;
-    ui.follow.textContent = active ? '退出跟拍' : '跟拍地铁';
-    ui.follow.setAttribute('aria-pressed', active);
-    updateGuide();
-    updateStatus();
-  }
-
-  function resetView() {
-    stopTour();
-    if (following) setFollowing(false);
-    flyTo(poseFor(mode));
-    updateStatus();
-  }
-
-  function stopCameraFlight() {
-    stopTour();
-    if (following) {
-      following = false;
-      ui.follow.textContent = '跟拍地铁';
-      ui.follow.setAttribute('aria-pressed', 'false');
-    }
-    if (flight) {
-      flight = undefined;
-      desired.focus.copy(current.focus);
-      desired.span = current.span;
-      desired.yaw = current.yaw;
-      desired.pitch = current.pitch;
-    }
-    updateStatus();
-  }
-
-  const fingers = new Map();
-  function orbit(dx, dy) {
-    stopCameraFlight();
-    desired.yaw = clamp(desired.yaw - dx * 0.0075, -1.08, 1.39);
-    desired.pitch = clamp(desired.pitch + dy * 0.0049, 0.21, 0.95);
-  }
-  function zoom(factor) {
-    stopCameraFlight();
-    desired.span = clamp(desired.span * factor, 18, 425);
-  }
-  canvas.addEventListener('pointerdown', event => {
-    if (event.button !== 0) return;
-    canvas.setPointerCapture(event.pointerId);
-    fingers.set(event.pointerId, [event.clientX, event.clientY]);
-  });
-  canvas.addEventListener('pointermove', event => {
-    const prior = fingers.get(event.pointerId);
-    if (!prior) return;
-    const point = [event.clientX, event.clientY];
-    if (fingers.size === 2) {
-      const other = [...fingers].find(([id]) => id !== event.pointerId)[1];
-      const old = Math.hypot(prior[0] - other[0], prior[1] - other[1]);
-      const next = Math.hypot(point[0] - other[0], point[1] - other[1]);
-      if (old > 4 && next > 4) zoom(old / next);
-    } else if (fingers.size === 1) {
-      orbit(point[0] - prior[0], point[1] - prior[1]);
-    }
-    fingers.set(event.pointerId, point);
-  });
-  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
-    canvas.addEventListener(type, event => fingers.delete(event.pointerId));
-  }
-  canvas.addEventListener('wheel', event => {
-    event.preventDefault();
-    zoom(Math.exp(clamp(event.deltaY, -170, 170) * 0.0016));
-  }, { passive: false });
-  canvas.tabIndex = 0;
-  canvas.setAttribute('aria-label', '三维城市。方向键旋转，加减键缩放，Home 键重置。');
-  canvas.addEventListener('keydown', event => {
-    const actions = {
-      ArrowLeft: () => orbit(-12, 0), ArrowRight: () => orbit(12, 0),
-      ArrowUp: () => orbit(0, 12), ArrowDown: () => orbit(0, -12),
-      '+': () => zoom(0.86), '=': () => zoom(0.86), '-': () => zoom(1.15), Home: resetView,
-    };
-    if (!Object.hasOwn(actions, event.key)) return;
-    event.preventDefault();
-    actions[event.key]();
-  });
-
-  for (const node of nav) node.addEventListener('click', () => navigate(node.dataset.route));
-  function onHistoryChange() { stopTour(); setMode(routeFromHash()); }
-  window.addEventListener('popstate', onHistoryChange);
-  window.addEventListener('hashchange', onHistoryChange);
-  ui['cut-cta'].addEventListener('click', () => {
-    stopTour();
-    if (mode === 'river') setDepth(depth ? 0 : maximumDepth);
-    else navigate('river');
-  });
-  ui.tour.addEventListener('click', () => {
-    if (tour) return stopTour();
-    tour = { index: 0, wait: 0 };
-    ui.tour.textContent = '结束巡游';
-    ui.tour.setAttribute('aria-pressed', 'true');
-    navigate(tourStops[0], true);
-    updateStatus();
-  });
-  ui.night.addEventListener('click', () => {
-    night = !night;
-    ui.app.dataset.night = String(night);
-    ui.night.textContent = night ? '日景' : '夜景';
-    ui.night.setAttribute('aria-pressed', night);
-    city.setNight?.(night);
-    terrain.setNight?.(night);
-  });
-  ui['reset-view'].addEventListener('click', resetView);
-  ui.fullscreen.hidden = !ui.app.requestFullscreen;
-  ui.fullscreen.addEventListener('click', async () => {
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await ui.app.requestFullscreen();
-    } catch {
-      ui.fullscreen.hidden = true;
-    }
-  });
-  document.addEventListener('fullscreenchange', () => {
-    const label = document.fullscreenElement ? '退出全屏' : '全屏';
-    ui.fullscreen.setAttribute('aria-label', label);
-    ui.fullscreen.title = label;
-  });
-  ui.depth.addEventListener('input', () => {
-    stopTour();
-    if (mode === 'building') setExpansion(Number(ui.depth.value));
-    else setDepth(Number(ui.depth.value));
-  });
-  ui.follow.addEventListener('click', () => setFollowing(!following));
-  ui.experiment.addEventListener('click', () => {
-    stopTour();
-    activeExperiments.set(mode, !activeExperiments.get(mode));
-    refreshExperiment();
-  });
-  ui.garden.addEventListener('click', () => {
-    garden = !garden;
-    experiment.setGarden(garden);
-    ui.garden.setAttribute('aria-pressed', garden);
-  });
-  ui.replay.addEventListener('click', () => experiment.restart());
-
-  function resize() {
-    width = Math.max(1, ui.viewport.clientWidth);
-    height = Math.max(1, ui.viewport.clientHeight);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    for (const pin of pins) pin.labelWidth = 0;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, width < 650 ? 1.25 : 1.55));
-    renderer.setSize(width, height, false);
-  }
-
-  function frame(now) {
-    if (!rendering) return;
-    renderFrame = requestAnimationFrame(frame);
-    const dt = last ? Math.min((now - last) / 1000, 0.065) : 1 / 60;
-    last = now;
-    if (!showing) return;
-    if (!reduceMotion.matches || following || activeExperiments.get(mode)) time += dt;
-    const expandTo = mode === 'building' ? expansion / 100 : 0;
-    const depthTo = mode === 'river' && (!flight || flight.time > flight.duration * 0.35) ? depth : 0;
-    const easedCut = damp(cut, depthTo, 3.25, dt);
-    const easedOpen = damp(opened, expandTo, 4, dt);
-    const newCut = reduceMotion.matches || Math.abs(easedCut - depthTo) < 0.035 ? depthTo : easedCut;
-    const newOpen = reduceMotion.matches || Math.abs(easedOpen - expandTo) < 0.002 ? expandTo : easedOpen;
-    if (newCut !== cut) terrain.setDepth(newCut);
-    if (mode === 'building' || newOpen !== opened) {
-      property.position.y = propertyGround + newOpen * 4.3;
-      building.update(dt, time, newOpen, mode === 'building' && newOpen > 0.1 ? selected : null);
-    }
-    cut = newCut;
-    opened = newOpen;
-    nightLevel = reduceMotion.matches ? Number(night) : damp(nightLevel, Number(night), 3, dt);
-    ambient.color.copy(daySky).lerp(nightSky, nightLevel);
-    ambient.intensity = lerp(2.1, 0.95, nightLevel);
-    sun.intensity = lerp(2.65, 0.20, nightLevel);
-    fill.intensity = lerp(1.35, 0.83, nightLevel);
-    scene.fog.color.copy(dayFog).lerp(nightFog, nightLevel);
-    city.update(dt, time);
-    terrain.update(dt, time);
-    infrastructure.update(dt, time, cut);
-    experiment.update(dt, time);
-    if (mode === 'plain') ui['rain-progress'].value = experiment.progress();
-    updateCamera(dt);
-    renderPins();
-    renderer.render(scene, camera);
-    ui.loading.hidden = true;
-    updateTour(dt);
-  }
-
-  new ResizeObserver(resize).observe(ui.viewport);
-  new IntersectionObserver(([entry]) => { showing = entry.isIntersecting; }).observe(ui.viewport);
-  document.addEventListener('visibilitychange', () => { last = 0; });
-  canvas.addEventListener('webglcontextlost', event => {
-    event.preventDefault();
-    rendering = false;
-    cancelAnimationFrame(renderFrame);
+    if (kind === '3d') return mount('map', reason);
     ui.loading.hidden = false;
-    ui.loading.textContent = '3D 画面已暂停，刷新页面可以重新打开。';
-  });
-  resize();
-  setMode(routeFromHash(), true);
-  renderFrame = requestAnimationFrame(frame);
+    ui.loading.textContent = '互动地图也未能加载。可以刷新页面或再试 3D。';
+  }
 }
 
-try {
-  start();
-} catch (error) {
-  console.error(error);
-  ui.loading.textContent = '未能打开 3D 城市。请尝试启用浏览器硬件加速，再刷新页面。';
+function chooseFormat(kind) {
+  stopTour();
+  pinnedFormat = kind === 'map' ? 'map' : undefined;
+  writeLocation(true);
+  mount(kind);
 }
+
+async function share() {
+  const value = link().href;
+  ui['share-result'].textContent = '';
+  ui['share-field'].hidden = true;
+  try {
+    await navigator.clipboard.writeText(value);
+    ui['share-result'].textContent = caseId ? '已复制实验链接' : '已复制场景链接';
+  } catch {
+    ui['share-field'].hidden = false;
+    ui['share-location'].value = value;
+    ui['share-location'].focus();
+    ui['share-location'].select();
+  }
+}
+
+function refreshLocation() {
+  stopTour();
+  const state = parseLocation();
+  const oldFormat = pinnedFormat;
+  pinnedFormat = state.format;
+  enter(state.mode, state.caseId, state.level);
+  if (state.format !== oldFormat && activeView?.kind !== (state.format || '3d')) mount(state.format || '3d');
+}
+window.addEventListener('hashchange', refreshLocation);
+window.addEventListener('popstate', refreshLocation);
+
+for (const node of nav) node.addEventListener('click', () => navigate(node.dataset.route));
+for (const node of choices) node.addEventListener('click', () => chooseCase(node.dataset.case));
+ui['case-level'].addEventListener('input', () => {
+  if (!caseId) return;
+  level = clamp(Number(ui['case-level'].value), 0, 100);
+  throughView('setDiscover', caseId, level, false);
+  renderCase();
+  writeLocation(true);
+});
+ui.depth.addEventListener('input', () => {
+  stopTour();
+  const value = Number(ui.depth.value);
+  if (mode === 'building') setExpansion(value);
+  else setDepth(value);
+});
+ui['cut-cta'].addEventListener('click', () => {
+  stopTour();
+  if (mode === 'river') setDepth(depth ? 0 : maximumDepth);
+  else navigate('river');
+});
+ui.tour.addEventListener('click', () => {
+  if (tourIndex >= 0) return stopTour();
+  tourIndex = 0;
+  ui.tour.textContent = '结束巡游';
+  ui.tour.setAttribute('aria-pressed', 'true');
+  nextTourStop();
+});
+ui.follow.addEventListener('click', () => setFollowing(!following));
+ui.night.addEventListener('click', () => {
+  night = !night;
+  ui.app.dataset.night = String(night);
+  ui.night.textContent = night ? '日景' : '夜景';
+  ui.night.setAttribute('aria-pressed', night);
+  throughView('setNight', night);
+});
+ui.experiment.addEventListener('click', () => {
+  stopTour();
+  const active = !activeExperiments.get(mode);
+  activeExperiments.set(mode, active);
+  throughView('setExperiment', mode, active);
+  refreshExperiment();
+});
+ui.garden.addEventListener('click', () => {
+  garden = !garden;
+  ui.garden.setAttribute('aria-pressed', garden);
+  throughView('setGarden', garden);
+});
+ui.replay.addEventListener('click', () => throughView('replay'));
+ui['use-3d'].addEventListener('click', () => chooseFormat('3d'));
+ui['use-map'].addEventListener('click', () => chooseFormat('map'));
+ui['zoom-in'].addEventListener('click', () => { onInteract(); throughView('zoom', 0.82); });
+ui['zoom-out'].addEventListener('click', () => { onInteract(); throughView('zoom', 1.22); });
+ui['reset-view'].addEventListener('click', () => { onInteract(); resetAngle(); throughView('resetView'); });
+ui.angle.addEventListener('click', () => {
+  onInteract();
+  const aerial = throughView('toggleAngle');
+  ui.angle.textContent = aerial ? '斜视' : '俯瞰';
+  ui.angle.setAttribute('aria-pressed', Boolean(aerial));
+});
+ui.share.addEventListener('click', share);
+ui.fullscreen.hidden = !ui.app.requestFullscreen;
+ui.fullscreen.addEventListener('click', async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await ui.app.requestFullscreen();
+  } catch {
+    ui.fullscreen.hidden = true;
+  }
+});
+document.addEventListener('fullscreenchange', () => {
+  const name = document.fullscreenElement ? '退出全屏' : '全屏';
+  ui.fullscreen.setAttribute('aria-label', name);
+  ui.fullscreen.title = name;
+});
+
+function playback() {
+  playbackId = requestAnimationFrame(playback);
+  if (mode === 'plain') ui['rain-progress'].value = throughView('progress') || 0;
+}
+
+window.addEventListener('pagehide', event => {
+  if (!event.persisted) {
+    cancelAnimationFrame(playbackId);
+    pendingVersion++;
+    activeView?.adapter.destroy();
+  }
+});
+
+const initial = parseLocation();
+pinnedFormat = initial.format;
+enter(initial.mode, initial.caseId, initial.level, { immediate: true });
+mount(pinnedFormat || '3d');
+playbackId = requestAnimationFrame(playback);

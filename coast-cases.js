@@ -1,0 +1,40 @@
+const tunnelSource = ['美国联邦公路管理局 · 道路隧道手册', 'https://www.fhwa.dot.gov/bridge/tunnel/pubs/nhi09010/tunnel_manual.pdf'];
+
+export const cases = {
+  pump: {
+    label: '江底的水往哪走',
+    mode: 'river',
+    title: '积水到了隧道最低点，下一步去哪？',
+    intro: '水先流进低处的集水池，再由泵送走。你在车里通常看不到这套系统。',
+    control: '排水泵工作率',
+    initial: 25,
+    accent: '#7de9fc',
+    low: '泵送较慢，集水池保留更多水',
+    high: '泵送较快，集水池水位较低',
+    source: tunnelSource,
+  },
+  air: {
+    label: '隧道里看不见的风',
+    mode: 'river',
+    title: '汽车开进没有窗户的隧道，空气怎么换？',
+    intro: '风机可以推动隧道内的空气流动。改变功率，比较同一段隧道里的气流。',
+    control: '风机功率',
+    initial: 35,
+    accent: '#a8f9d9',
+    low: '风机减弱，光点移动较慢',
+    high: '风机增强，光点移动较快',
+    source: tunnelSource,
+  },
+  load: {
+    label: '一栋楼怎么把重量交给地面',
+    mode: 'building',
+    title: '给屋顶加一点重量，先由谁接住？',
+    intro: '在这个框架模型里，荷载经过楼板、梁、柱，最后由基础传给地面。顺着亮起的线找一遍。',
+    control: '屋顶附加荷载',
+    initial: 45,
+    accent: '#ffd987',
+    low: '荷载较小，光线较淡',
+    high: '荷载增大，沿结构传力的光线变亮',
+    source: ['加州大学伯克利分校 · 结构工程讲义', 'https://www.ocf.berkeley.edu/~chiep/wp-content/uploads/2024/01/CE-120-Structural-Engineering-Reader.pdf'],
+  },
+};
