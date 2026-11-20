@@ -1,4 +1,12 @@
 export const destinations = {
+  street: {
+    label: '街角',
+    title: '街底下，还在运转',
+    intro: '车在走，店还亮着。点一下，看看脚下。',
+    accent: '#ffcf9f',
+    question: '这条街底下有什么？',
+    detail: '打开地面，再选择水管、地铁和地基。',
+  },
   geo: {
     label: '地底全景',
     title: '把整座城翻开',

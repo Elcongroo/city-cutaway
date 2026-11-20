@@ -8,42 +8,13 @@ import { createCoastExpansion } from './coast-expansion.js';
 import { createCoastDiscover } from './coast-discover.js?v=20261120.6';
 import { createCoastLandforms } from './coast-landforms.js';
 import { createCoastWaterworks } from './coast-waterworks.js';
-import { destinations, underground, buildingParts } from './coast-guide.js?v=20261120.7';
+import { destinations, underground, buildingParts } from './coast-guide.js?v=20261120.8';
 import { createGeoGround } from './geo-ground.js';
 import { createGeoAssets } from './geo-assets.js';
 import { GEO, geoSites } from './geo-data.js';
+import { connectRenderer, viewError } from './render-context.js';
 
 const { clamp, damp, lerp, degToRad } = THREE.MathUtils;
-
-function viewError(code, cause) {
-  return Object.assign(new Error(code, { cause }), { code });
-}
-
-function connectRenderer() {
-  const profiles = [
-    { antialias: true, powerPreference: 'default' },
-    { antialias: false, powerPreference: 'low-power' },
-    { antialias: false, powerPreference: 'default' },
-  ];
-  let contextAvailable = false;
-  let lastError;
-  for (const settings of profiles) {
-    const canvas = document.createElement('canvas');
-    const attributes = { ...settings, alpha: true, depth: true, failIfMajorPerformanceCaveat: false };
-    let context;
-    try {
-      context = canvas.getContext('webgl2', attributes);
-      if (!context) continue;
-      contextAvailable = true;
-      const renderer = new THREE.WebGLRenderer({ canvas, context, ...attributes });
-      return { renderer, canvas };
-    } catch (error) {
-      lastError = error;
-      context?.getExtension('WEBGL_lose_context')?.loseContext();
-    }
-  }
-  throw viewError(contextAvailable ? 'renderer-init' : 'no-webgl2', lastError);
-}
 
 export function createCoast3D(container, options) {
   const { onNavigate, onFeature, onGeoSite, onGeoFilter, onInteract, onError, onStatus } = options;

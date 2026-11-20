@@ -1,8 +1,10 @@
 # 切开城市 · City Cutaway
 
-[地底全景](https://elcongroo.github.io/city-cutaway/#geo) · [地图模式](https://elcongroo.github.io/city-cutaway/?view=map#geo) · [地表总览](https://elcongroo.github.io/city-cutaway/#atlas)
+[3D 街角](https://elcongroo.github.io/city-cutaway/#street) · [地表总览](https://elcongroo.github.io/city-cutaway/#atlas) · [地底全景](https://elcongroo.github.io/city-cutaway/#geo) · [地图模式](https://elcongroo.github.io/city-cutaway/?view=map#geo)
 
-首屏是一条沿虚构海湾展开的地底长剖面。山脚基岩、河谷农田、老城街区、临江软土、港区回填与外海断崖共用一把深度尺。可向下显露到 62 米，再分别查看岩土与地下水、基础、给水与重力排水。
+首屏是一处入夜的 3D 街角。打开地面，就能看见穿街而过的地铁、通往地下车位的坡道，以及相邻的水管和桩基。拖动可环绕街道，点选设施可拉近。
+
+地底全景沿虚构海湾展开。山脚基岩、河谷农田、老城街区、临江软土、港区回填与外海断崖共用一把深度尺。可向下显露到 62 米，再分别查看岩土与地下水、基础、给水与重力排水。
 
 - [老城管沟](https://elcongroo.github.io/city-cutaway/?site=oldcity&layer=pipes#geo)展示给水管、颗粒垫层、回填土、阀井和较低处的重力排水。
 - [港区基础](https://elcongroo.github.io/city-cutaway/?site=harborfill&layer=foundation#geo)可对照回填、软黏土与长桩，再切回山脚对比浅基础。

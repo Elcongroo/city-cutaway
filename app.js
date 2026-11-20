@@ -1,7 +1,8 @@
-import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.7';
+import { destinations, underground, buildingParts, experiments, tourStops } from './coast-guide.js?v=20261120.8';
 import { cases } from './coast-cases.js?v=20261120.7';
 import { createPumpRun, pumpDefaults } from './pump-model.js';
 import { GEO, geoSites, geoFilters, geoSources } from './geo-data.js';
+import { streetParts } from './street-guide.js?v=20261120.8';
 
 const ui = Object.fromEntries([
   'app', 'viewport', 'loading', 'places', 'scene-title', 'scene-intro', 'night', 'sunset', 'reset-view', 'fullscreen',
@@ -13,6 +14,7 @@ const ui = Object.fromEntries([
   'pump-meter', 'pump-water', 'pump-height', 'pump-indicators', 'pump-storm', 'pump-primary', 'pump-auto',
   'pump-lab', 'pump-inflow', 'pump-inflow-value', 'pump-stages', 'pump-reset',
   'geo-home', 'geo-key', 'geo-toolbar', 'geo-sites', 'geo-filters', 'geo-measures', 'geo-layers', 'geo-model-note',
+  'street-controls', 'street-toggle', 'street-parts', 'street-note', 'retry-3d',
 ].map(id => [id, document.getElementById(id)]));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const maximumDepth = 30;
@@ -55,6 +57,9 @@ let expansion = 0;
 let selected;
 let following = false;
 let night = false;
+let streetNight = true;
+let streetOpen = false;
+let streetFocus = null;
 let sunset = true;
 let garden = false;
 let tourIndex = -1;
@@ -146,11 +151,47 @@ function makeButton(label, action) {
   return node;
 }
 
+const streetButtons = Object.entries(streetParts).map(([id, part]) => {
+  const node = makeButton(part.label, () => selectStreetPart(id));
+  node.style.setProperty('--part-color', part.color);
+  return [id, node];
+});
+ui['street-parts'].replaceChildren(...streetButtons.map(([, node]) => node));
+
+function renderStreet() {
+  const visible = mode === 'street';
+  ui['street-controls'].hidden = !visible;
+  ui.app.dataset.streetOpen = String(visible && streetOpen);
+  ui.app.dataset.streetFocus = visible && streetFocus ? streetFocus : '';
+  if (!visible) return;
+  ui['street-toggle'].textContent = streetOpen ? '合上地面' : '打开地面';
+  ui['street-toggle'].setAttribute('aria-pressed', streetOpen);
+  ui['street-parts'].hidden = !streetOpen;
+  ui['street-note'].hidden = !streetOpen || !streetFocus;
+  ui['street-note'].textContent = streetFocus ? streetParts[streetFocus].note : '';
+  for (const [id, node] of streetButtons) node.setAttribute('aria-pressed', id === streetFocus);
+}
+
+function selectStreetPart(id) {
+  if (mode !== 'street') return;
+  if (id) {
+    streetOpen = true;
+    streetFocus = streetFocus === id ? null : id;
+  } else {
+    streetOpen = !streetOpen;
+    streetFocus = null;
+  }
+  throughView('setStreet', streetOpen, streetFocus);
+  renderStreet();
+  writeLocation(true);
+}
+
 function renderControls() {
   const profile = destinations[mode];
   ui.app.dataset.mode = mode;
-  ui['scene-title'].textContent = profile.title;
+  ui['scene-title'].textContent = mode === 'street' ? '街底下，\n还在运转' : profile.title;
   ui['scene-intro'].textContent = profile.intro;
+  renderStreet();
   const geology = mode === 'geo';
   const usesSlider = geology || mode === 'river' || mode === 'building';
   ui['slider-panel'].hidden = !usesSlider;
@@ -374,11 +415,16 @@ function parseLocation() {
   const requestedSite = url.searchParams.get('site');
   const requestedFilter = url.searchParams.get('layer');
   const rawGround = url.searchParams.get('ground');
+  const requestedPart = url.searchParams.get('part');
+  const isMap = url.searchParams.get('view') === 'map';
+  const route = discovery?.mode || (Object.hasOwn(destinations, request) ? request : isMap ? 'geo' : 'street');
   return {
-    mode: discovery?.mode || (Object.hasOwn(destinations, request) ? request : 'geo'),
+    mode: route,
     caseId: discovery ? found : undefined,
     level: Number.isFinite(numeric) ? clamp(numeric, 0, 100) : discovery?.initial,
-    format: url.searchParams.get('view') === 'map' ? 'map' : undefined,
+    format: isMap && route !== 'street' ? 'map' : undefined,
+    streetOpen: url.searchParams.get('open') === '1',
+    streetFocus: Object.hasOwn(streetParts, requestedPart) ? requestedPart : null,
     pump: {
       inflow: Number.isFinite(inflow) ? clamp(inflow, 0, 100) : pumpDefaults.inflow,
       primary: url.searchParams.get('main') !== 'off',
@@ -411,7 +457,11 @@ function link() {
     if (ground.filter !== 'all') url.searchParams.set('layer', ground.filter);
     if (ground.depth !== GEO.limit) url.searchParams.set('ground', String(ground.depth));
   }
-  if (pinnedFormat === 'map') url.searchParams.set('view', 'map');
+  if (mode === 'street' && streetOpen) {
+    url.searchParams.set('open', '1');
+    if (streetFocus) url.searchParams.set('part', streetFocus);
+  }
+  if (mode !== 'street' && pinnedFormat === 'map') url.searchParams.set('view', 'map');
   return url;
 }
 
@@ -429,6 +479,11 @@ function closeCase() {
 }
 
 function applyStateToView(adapter, immediate) {
+  if (mode === 'street') {
+    adapter.setStreet(streetOpen, streetFocus, immediate);
+    adapter.setNight(streetNight);
+    return;
+  }
   adapter.setMode(mode, immediate);
   adapter.setDepth(depth);
   adapter.setExpansion(expansion);
@@ -461,8 +516,11 @@ function enter(id, discoveryId, value, { immediate = false, preserve = false } =
   }
   if (caseId && mode === 'river') depth = Math.max(depth, 28);
   if (caseId === 'load') expansion = Math.max(expansion, 82);
-  if (activeView) applyStateToView(activeView.adapter, immediate);
+  const variant = mode === 'street' ? 'street' : 'coast';
+  if (activeView?.variant === variant) applyStateToView(activeView.adapter, immediate);
   renderControls();
+  renderLight(false);
+  if (!immediate && (sceneChanged || !activeView) && activeView?.variant !== variant) mount(pinnedFormat || '3d');
 }
 
 function navigate(id, automatic = false) {
@@ -525,6 +583,14 @@ function setFormatUI(kind, reason = '') {
 
 async function mount(kind, note = '') {
   const edition = ++pendingVersion;
+  const variant = mode === 'street' ? 'street' : 'coast';
+  if (variant === 'street') kind = '3d';
+  if (activeView?.variant !== variant) {
+    activeView?.adapter.destroy();
+    activeView?.layer.remove();
+    activeView = undefined;
+  }
+  ui['retry-3d'].hidden = true;
   if (activeView?.kind === kind) {
     setFormatUI(kind, note);
     return;
@@ -534,7 +600,9 @@ async function mount(kind, note = '') {
   layer.style.visibility = 'hidden';
   ui.viewport.append(layer);
   ui.loading.hidden = Boolean(activeView);
-  ui.loading.textContent = kind === '3d' ? '正在搭建海湾城市…' : '正在绘制互动地图…';
+  ui.loading.textContent = variant === 'street' ? '正在打开 3D 街景…' :
+    kind === '3d' ? '正在搭建海湾城市…' : '正在绘制互动地图…';
+  if (variant === 'street') ui['street-controls'].hidden = true;
   let adapter;
   try {
     const options = {
@@ -542,16 +610,28 @@ async function mount(kind, note = '') {
       onFeature: selectPart,
       onGeoSite: selectGround,
       onGeoFilter: selectFilter,
+      onStreetPart: selectStreetPart,
       onInteract,
       onStatus(text) { if (activeView?.layer === layer) ui['view-status'].textContent = text; },
       onError(error) {
         if (activeView?.layer !== layer) return;
         console.error(error);
+        if (variant === 'street') {
+          activeView = undefined;
+          adapter.destroy();
+          layer.remove();
+          showStreetFailure();
+          return;
+        }
         mount('map', failureCopy[error.code] || failureCopy['render-failed']);
       },
     };
-    if (kind === '3d') {
-      const { createCoast3D } = await import('./coast-3d.js?v=20261120.7');
+    if (variant === 'street') {
+      const { createStreet3D } = await import('./street-3d.js?v=20261120.8');
+      if (edition !== pendingVersion) { layer.remove(); return; }
+      adapter = createStreet3D(layer, options);
+    } else if (kind === '3d') {
+      const { createCoast3D } = await import('./coast-3d.js?v=20261120.8');
       if (edition !== pendingVersion) { layer.remove(); return; }
       adapter = createCoast3D(layer, options);
     } else {
@@ -561,7 +641,7 @@ async function mount(kind, note = '') {
     }
     applyStateToView(adapter, true);
     const previous = activeView;
-    activeView = { adapter, layer, kind };
+    activeView = { adapter, layer, kind, variant };
     layer.style.visibility = '';
     previous?.adapter.destroy();
     previous?.layer.remove();
@@ -569,11 +649,17 @@ async function mount(kind, note = '') {
     setFormatUI(kind, note);
     adapter.start?.();
     ui.loading.hidden = true;
+    if (variant === 'street') renderStreet();
   } catch (error) {
     adapter?.destroy();
     layer.remove();
     if (edition !== pendingVersion) return;
     console.error(error);
+    if (variant === 'street') {
+      if (activeView?.layer === layer) activeView = undefined;
+      showStreetFailure();
+      return;
+    }
     const reason = failureCopy[error.code] || failureCopy['module-load'];
     if (kind === '3d' && activeView?.kind === 'map') {
       setFormatUI('map', reason);
@@ -584,6 +670,15 @@ async function mount(kind, note = '') {
     ui.loading.hidden = false;
     ui.loading.textContent = '互动地图也未能加载。可以刷新页面或再试 3D。';
   }
+}
+
+function showStreetFailure() {
+  ui.loading.textContent = '这个浏览器暂时没能打开 3D 街景。';
+  ui.loading.hidden = false;
+  ui['retry-3d'].hidden = false;
+  ui['street-controls'].hidden = true;
+  ui.angle.hidden = true;
+  updateZoomButtons();
 }
 
 function chooseFormat(kind) {
@@ -612,13 +707,17 @@ function refreshLocation() {
   stopTour();
   const state = parseLocation();
   const oldFormat = pinnedFormat;
+  const oldMode = mode;
   pinnedFormat = state.format;
   Object.assign(pumpSettings, pumpDefaults, state.pump);
   pumpStage = state.stage;
   pumpRun.reset();
   Object.assign(ground, state.ground);
+  streetOpen = state.streetOpen;
+  streetFocus = streetOpen ? state.streetFocus : null;
   enter(state.mode, state.caseId, state.level);
-  if (state.format !== oldFormat && activeView?.kind !== (state.format || '3d')) mount(state.format || '3d');
+  if (oldMode !== 'street' && state.mode !== 'street' &&
+      state.format !== oldFormat && activeView?.kind !== (state.format || '3d')) mount(state.format || '3d');
 }
 window.addEventListener('hashchange', refreshLocation);
 window.addEventListener('popstate', refreshLocation);
@@ -677,17 +776,27 @@ ui.tour.addEventListener('click', () => {
   nextTourStop();
 });
 ui.follow.addEventListener('click', () => setFollowing(!following));
-function renderLight() {
-  ui.app.dataset.night = String(night);
+function renderLight(updateView = true) {
+  const street = mode === 'street';
+  const isNight = street ? streetNight : night;
+  ui.app.dataset.night = String(isNight);
   ui.app.dataset.sunset = String(sunset && !night);
-  ui.night.textContent = night ? '结束夜景' : '夜景';
+  ui.night.textContent = isNight ? (street ? '日景' : '结束夜景') : '夜景';
   ui.sunset.textContent = sunset && !night ? '日景' : '夕照';
-  ui.night.setAttribute('aria-pressed', night);
+  ui.night.setAttribute('aria-pressed', isNight);
   ui.sunset.setAttribute('aria-pressed', sunset && !night);
-  throughView('setNight', night);
-  throughView('setSunset', sunset && !night);
+  if (updateView) {
+    throughView('setNight', isNight);
+    throughView('setSunset', sunset && !night);
+  }
 }
-ui.night.addEventListener('click', () => { night = !night; renderLight(); });
+ui.night.addEventListener('click', () => {
+  if (mode === 'street') streetNight = !streetNight;
+  else night = !night;
+  renderLight();
+});
+ui['street-toggle'].addEventListener('click', () => selectStreetPart(null));
+ui['retry-3d'].addEventListener('click', () => mount('3d'));
 ui.sunset.addEventListener('click', () => {
   sunset = night || !sunset;
   night = false;
@@ -759,7 +868,8 @@ pinnedFormat = initial.format;
 Object.assign(ground, initial.ground);
 Object.assign(pumpSettings, initial.pump);
 pumpStage = initial.stage;
-renderLight();
+streetOpen = initial.streetOpen;
+streetFocus = streetOpen ? initial.streetFocus : null;
 enter(initial.mode, initial.caseId, initial.level, { immediate: true });
 mount(pinnedFormat || '3d');
 playbackId = requestAnimationFrame(playback);
